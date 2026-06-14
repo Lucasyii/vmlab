@@ -19,6 +19,10 @@ int initLibrary(struct config* conf)
     return 0;
 }
 
+//
+// Routine is responsible for handling page faults on
+//   the specified address.
+//
 void pageFault(uint32_t address)
 {
     
