@@ -9,13 +9,13 @@
 
 // gives id for swap space
 //    returns 0 if no space is available
-//  extern uint32_t allocateSwap(void); 
+//  extern uint32_t allocateSwap(void);
 
 // simulator copies the data from page frame to "disk"
-//  extern void copyToSwap(uint32_t, uint32_t); 
+//  extern void copyToSwap(uint32_t frame, uint32_t swap);
 
 // simulator copies the data from "disk" to page frame
-//  void copyFromSwap(uint32_t, uint32_t);  
+//  void copyFromSwap(uint32_t swap, uint32_t frame); 
 
 struct config {
     int pageSize;

@@ -1,9 +1,23 @@
+/*
+ * vm-sim.c: Simulates page management of process traces
+ *
+ *
+ *
+ */
 #include <stdio.h>
 #include <dlfcn.h>
+#include <getopt.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdbool.h>
 #include "vm-api.h"
 
 int (*initLibrary)(struct config* conf) = NULL;
 void (*pageFault)(uint32_t address) = NULL;
+
+const char *USAGE = "TODO %s\n";
+
+int verbose_level = 0;
 
 int loadLibrary(char* fileName)
 {
@@ -14,10 +28,10 @@ int loadLibrary(char* fileName)
                 fileName, dlerror());
         return -1;
     }
-    
+
     initLibrary = dlsym(handle, "initLibrary");
     pageFault = dlsym(handle, "pageFault");
-    
+
     if (initLibrary == NULL ||
         pageFault == NULL)
     {
@@ -25,12 +39,12 @@ int loadLibrary(char* fileName)
         fprintf(stderr, "Failed to load interface for %s library\n", fileName);
         return -1;
     }
-    
+
     return 0;
 }
 
 int frameCount = -1;
-uint32_t allocateFrame(void)
+uint32_t allocateFrame(void) // frame is RAM
 {
     // Frame 0 is the root of the page table
     static uint32_t nextFrame = 0;
@@ -39,44 +53,96 @@ uint32_t allocateFrame(void)
     {
         return ++nextFrame;
     }
-    
+
     return 0;
 }
 
-uint32_t allocateSwap(void)
+uint32_t allocateSwap(void) // swap is Disk (extension of RAM)
 {
     static uint32_t nextSwap = 0;
-    
+
     // TODO - swap needs actual memory so that contents can be copied
-    
+
     return ++nextSwap;
 }
 
 void copyToSwap(uint32_t frame, uint32_t swap)
 {
-    
+
 }
 
 void copyFromSwap(uint32_t swap, uint32_t frame)
 {
-    
+
 }
 
+// frame count * page size == total RAM size
 // vm-sim -t <trace> -o <page fault library> -p <page size> -V <verbose level> -n <frame count>
 int main(int argc, char** argv)
 {
     char* traceName = NULL;
     char* libName = NULL;
-    
+
     int pageSize = 256;
-    
+
+    bool read_t = false, read_o = false, read_n = false;
+
     // Get opt of arguments
-    
+    // For now, page size is kept as optional
+    int opt, nread;
+    while ((opt = getopt(argc, argv, "hVpt:o:n:")) != -1) {
+        switch (opt) {
+        case 'h':
+            // print help function
+            break;
+        case 'V':
+            if (sscanf(optarg, "%u", &verbose_level) != 1)
+                fprintf(stderr, "verbose level not set\n");
+            break;
+        case 't':
+            nread = sscanf(optarg, "%s", traceName);
+            read_t = nread == 1;
+            break;
+        case 'o':
+            nread = sscanf(optarg, "%s", libName);
+            read_o = nread == 1;
+            break;
+        case 'p':
+            nread = sscanf(optarg, "%d", &pageSize);
+            // read_p = nread == 1;
+            break;
+        case 'n':
+            nread = sscanf(optarg, "%d", &frameCount);
+            read_n = nread == 1;
+            break;
+        default:
+            fprintf(stderr, "Error while parsing arguments.\n");
+            fprintf(stderr, USAGE, argv[0]);
+            return 1;
+        }
+    }
+
+    // Check for and reject any extra arguments
+    if (optind < argc) {
+        fprintf(stderr, "Extra arguments passed.\n");
+        fprintf(stderr, USAGE, argv[0]);
+        return 1;
+    }
+
+    // Check if mandatory arguments were given
+    if (!read_t || !read_o || !read_n || traceName == NULL) {
+        fprintf(stderr, "Mandatory arguments missing or zero.\n");
+        fprintf(stderr, USAGE, argv[0]);
+        return 1;
+    }
+
+
     // open page fault library
     if (loadLibrary(libName) != 0)
     {
-        
+
     }
+
     struct config c;
     c.pageSize = pageSize;
     c.numFrames = frameCount;
@@ -85,14 +151,14 @@ int main(int argc, char** argv)
     c.copyFromSwap = copyFromSwap;
     c.copyToSwap = copyToSwap;
     initLibrary(&c);
-    
+
     // open trace
     FILE* trace = fopen(traceName, "r");
     int addr = -1;
     while (fscanf(trace, "%x\n", &addr) > 0)
     {
-        
+
     }
-    
+
     return 0;
 }
