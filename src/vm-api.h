@@ -20,7 +20,7 @@
 struct config {
     int pageSize;
     int numFrames;
-    // TODO - root of page table
+    int pageTableRoot; // -1 if null/root not in memory, else, PA in RAM
     uint32_t (*allocateFrame)(void);
     uint32_t (*allocateSwap)(void);
     void (*copyToSwap)(uint32_t, uint32_t);

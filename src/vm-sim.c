@@ -17,7 +17,15 @@ void (*pageFault)(uint32_t address) = NULL;
 
 const char *USAGE = "TODO %s\n";
 
+// Global Constants
+
 int verbose_level = 0;
+uint32_t pte_valid_mask = 0x1;
+
+uint32_t *physical_memory = NULL;
+uint32_t *swap_space = NULL;
+
+int pageOffsetBits = 0;
 
 int loadLibrary(char* fileName)
 {
@@ -76,6 +84,60 @@ void copyFromSwap(uint32_t swap, uint32_t frame)
 
 }
 
+/*
+ * @pre         addr:   should be within bounds of physical address space
+ * @param[in]   addr:   Physical address of page table entry
+ * @param[out]  frame:  Frame index for memory or -1 on error
+ */
+int getPTE(uint32_t addr)
+{
+    uint32_t pte = physical_memory[addr];
+    if (!(pte & pte_valid_mask))
+    {
+        return -1;
+    }
+}
+
+/*
+ *
+ * @pre c->pageSize: power of 2
+ * @param[in] addr: Virtual address we tryna get
+ * @param[in] c:    config of our RAM
+ */
+int evaluate(uint32_t addr, struct config *c)
+{
+    int pageRoot = c->pageTableRoot;
+
+    // pageTableRoot not assigned yet
+    if (pageRoot == -1)
+    {
+        pageFault(0);
+    }
+
+    uint32_t vpn_mask = ~(c->pageSize - 1); // Assumes c->pageSize is 2^n
+    uint32_t vpn = (addr & vpn_mask) >> pageOffsetBits;
+
+    size_t pte_size = sizeof(uint32_t);
+    uint32_t pte_addr = pageRoot + (pte_size * vpn);
+
+    // page table entry address (manual address calculation)
+    uint32_t pte = getPTE(pte_addr);
+    if ((int)pte < 0)
+    {
+        pageFault(pte_addr);
+        return -1;
+    }
+}
+
+void initRAM(struct config *c)
+{
+    // RAM is just a set number of pages.
+    physical_memory = calloc(c->numFrames, c->pageSize);
+    c->pageTableRoot = 0;
+
+    return;
+}
+
 // frame count * page size == total RAM size
 // vm-sim -t <trace> -o <page fault library> -p <page size> -V <verbose level> -n <frame count>
 int main(int argc, char** argv)
@@ -108,7 +170,7 @@ int main(int argc, char** argv)
             read_o = nread == 1;
             break;
         case 'p':
-            nread = sscanf(optarg, "%d", &pageSize);
+            nread = sscanf(optarg, "%d", &pageOffsetBits);
             // read_p = nread == 1;
             break;
         case 'n':
@@ -144,20 +206,25 @@ int main(int argc, char** argv)
     }
 
     struct config c;
-    c.pageSize = pageSize;
+    c.pageSize = 1 << pageOffsetBits;
     c.numFrames = frameCount;
+    c.pageTableRoot = 0;
     c.allocateFrame = allocateFrame;
     c.allocateSwap = allocateSwap;
     c.copyFromSwap = copyFromSwap;
     c.copyToSwap = copyToSwap;
     initLibrary(&c);
 
+    initRAM(&c);
+
     // open trace
     FILE* trace = fopen(traceName, "r");
-    int addr = -1;
+    int addr = -1; // trace just going to be lines of uint32_t addr
     while (fscanf(trace, "%x\n", &addr) > 0)
     {
+        while (evaluate(addr, &c) != -1) {
 
+        }
     }
 
     return 0;
