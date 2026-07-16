@@ -15,10 +15,10 @@ Based on my understanding of VM, and the specs mentioned in the starter code:
 
     **Disclaimer** For now, frame count should only be a power of 2
 
-    - A frame is a page in Physical RAM, indexed from 0 (maybe 1 if we want error code to be 0)
+    - A frame is a page in Physical RAM, indexed from 0
+         => Error code should just be -1 cuz a frame aint gon be bigger than 32 bits
 
     - Assuming physical address space is always smaller than full virtual space
-             => TODO: implement this
 
     - Physical RAM space may not be as big as entire virtual address space
          => Can't represent entire VA space in PA space
@@ -30,7 +30,7 @@ Based on my understanding of VM, and the specs mentioned in the starter code:
 
     - uint32_t allocateFrame(void)
          => Acquires a new frame and returns the frame index
-         => frame index ranges from 1 ~ (frame count * pageSize) - 1
+         => frame index ranges from 0 ~ (frame count * pageSize) - 1
 
     - uint32_t allocateSwap(void)
          => Allocates a new swap space and returns the swap space id (?)

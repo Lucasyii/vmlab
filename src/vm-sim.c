@@ -17,14 +17,8 @@ void (*pageFault)(uint32_t address) = NULL;
 
 const char *USAGE = "TODO %s\n";
 
-// Global Constants
-
-int verbose_level = 0;
-uint32_t pte_valid_mask = 0x1;
-
-uint32_t *physical_memory = NULL;
-uint32_t *swap_space = NULL;
-
+uint32_t *physicalMemory = NULL;
+uint32_t *swapSpace = NULL;
 int pageOffsetBits = 0;
 
 int loadLibrary(char* fileName)
@@ -85,57 +79,21 @@ void copyFromSwap(uint32_t swap, uint32_t frame)
 }
 
 /*
- * @pre         addr:   should be within bounds of physical address space
- * @param[in]   addr:   Physical address of page table entry
- * @param[out]  frame:  Frame index for memory or -1 on error
- */
-int getPTE(uint32_t addr)
-{
-    uint32_t pte = physical_memory[addr];
-    if (!(pte & pte_valid_mask))
-    {
-        return -1;
-    }
-}
-
-/*
  *
+ * @pre assumes correct initialization of library
  * @pre c->pageSize: power of 2
  * @param[in] addr: Virtual address we tryna get
  * @param[in] c:    config of our RAM
  */
-int evaluate(uint32_t addr, struct config *c)
+int evaluate(uint32_t virtual_addr, struct config *c)
 {
-    int pageRoot = c->pageTableRoot;
+    // 1. Get vpn from virtual_addr
 
-    // pageTableRoot not assigned yet
-    if (pageRoot == -1)
-    {
-        pageFault(0);
-    }
+    // if pageOffsetBits = 4 ==> 000011...11111
+    uint32_t vpn_mask = ~(~0 << (32 - pageOffsetBits));
+    uint32_t vpn = vpn_mask & (virtual_addr >> pageOffsetBits);
 
-    uint32_t vpn_mask = ~(c->pageSize - 1); // Assumes c->pageSize is 2^n
-    uint32_t vpn = (addr & vpn_mask) >> pageOffsetBits;
-
-    size_t pte_size = sizeof(uint32_t);
-    uint32_t pte_addr = pageRoot + (pte_size * vpn);
-
-    // page table entry address (manual address calculation)
-    uint32_t pte = getPTE(pte_addr);
-    if ((int)pte < 0)
-    {
-        pageFault(pte_addr);
-        return -1;
-    }
-}
-
-void initRAM(struct config *c)
-{
-    // RAM is just a set number of pages.
-    physical_memory = calloc(c->numFrames, c->pageSize);
-    c->pageTableRoot = 0;
-
-    return;
+    // 2. Try to look into PTEA
 }
 
 // frame count * page size == total RAM size
@@ -146,6 +104,7 @@ int main(int argc, char** argv)
     char* libName = NULL;
 
     int pageSize = 256;
+    pageOffsetBits = 0;
 
     bool read_t = false, read_o = false, read_n = false;
 
@@ -158,8 +117,8 @@ int main(int argc, char** argv)
             // print help function
             break;
         case 'V':
-            if (sscanf(optarg, "%u", &verbose_level) != 1)
-                fprintf(stderr, "verbose level not set\n");
+            // if (sscanf(optarg, "%u", &verbose_level) != 1)
+                // fprintf(stderr, "verbose level not set\n");
             break;
         case 't':
             nread = sscanf(optarg, "%s", traceName);
@@ -214,8 +173,6 @@ int main(int argc, char** argv)
     c.copyFromSwap = copyFromSwap;
     c.copyToSwap = copyToSwap;
     initLibrary(&c);
-
-    initRAM(&c);
 
     // open trace
     FILE* trace = fopen(traceName, "r");

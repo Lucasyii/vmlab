@@ -7,15 +7,21 @@ uint32_t (*allocateSwap)(void) = NULL;
 void (*copyToSwap)(uint32_t, uint32_t) = NULL;
 void (*copyFromSwap)(uint32_t, uint32_t) = NULL;
 
+//
+// initLibrary is what happens to virtual memory during
+//   start of process
+//
+// Should allocate a frame to set PTBR
+//
 int initLibrary(struct config* conf)
 {
     if (conf == NULL) return -1;
-    
+
     allocateFrame = conf->allocateFrame;
     allocateSwap = conf->allocateSwap;
     copyToSwap = conf->copyToSwap;
     copyFromSwap = conf->copyFromSwap;
-    
+
     return 0;
 }
 
@@ -25,5 +31,5 @@ int initLibrary(struct config* conf)
 //
 void pageFault(uint32_t address)
 {
-    
+
 }

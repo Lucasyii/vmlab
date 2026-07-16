@@ -5,6 +5,7 @@ void calculate(int psize_bits)
 {
     int vpn_bits = 32 - psize_bits;
     int page_level_bits = psize_bits - 2;
+    int page_entry_num = (1 << psize_bits) / 4;
 
     if (page_level_bits <= 0)  {
         printf("page_level bits too low: %d\n", page_level_bits);
@@ -16,6 +17,7 @@ void calculate(int psize_bits)
         printf("Page size: %d\n", 1 << psize_bits);
         printf("VPN bits: %d, Bits for 1 level: %d, # of levels: %d\n",
                 vpn_bits, page_level_bits, vpn_bits/page_level_bits);
+        printf("# of page entries per level: %d\n", page_entry_num);
     }
     return;
 }
