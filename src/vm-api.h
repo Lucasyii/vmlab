@@ -27,6 +27,14 @@ struct config {
     void (*copyFromSwap)(uint32_t, uint32_t);
 };
 
+// To use inside of the simulator itself. config is exposed, pageTableSettings isn't
+// Page table entry are each 4 bytes SET
+// All entries being -1 means they are null
+struct pageTableHeader {
+    int pageOffsetBits;
+    int levels;
+};
+
 // The following functions are defined in the
 //   student library implementation.
 //  extern int initLibrary(struct config* conf);

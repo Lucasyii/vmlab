@@ -15,11 +15,14 @@
 int (*initLibrary)(struct config* conf) = NULL;
 void (*pageFault)(uint32_t address) = NULL;
 
-const char *USAGE = "TODO %s\n";
+const char *USAGE = "%s -t <trace> -o <page fault library> -p <page offset bits> -V <verbose level> -n <frame count>\n";
 
-uint32_t *physicalMemory = NULL;
-uint32_t *swapSpace = NULL;
-int pageOffsetBits = 0;
+typedef uint32_t pte_t;
+
+// char * to make them byte indexable
+char *physicalMemory = NULL;
+char *swapSpace = NULL;
+struct pageTableHeader *pt;
 
 int loadLibrary(char* fileName)
 {
@@ -46,10 +49,10 @@ int loadLibrary(char* fileName)
 }
 
 int frameCount = -1;
-uint32_t allocateFrame(void) // frame is RAM
+uint32_t allocateFrame() // frame is RAM
 {
     // Frame 0 is the root of the page table
-    static uint32_t nextFrame = 0;
+    static uint32_t nextFrame = 0; // didn't know this is how that worked
     if (nextFrame < (uint32_t)frameCount ||
         frameCount == -1)
     {
@@ -82,36 +85,96 @@ void copyFromSwap(uint32_t swap, uint32_t frame)
  *
  * @pre assumes correct initialization of library
  * @pre c->pageSize: power of 2
- * @param[in] addr: Virtual address we tryna get
- * @param[in] c:    config of our RAM
+ * @param[in]  addr: Virtual address we tryna get
+ * @param[in]     c: config of our RAM
+ * @param[out]  ret: Physical address we getting OR -1 on error so page fault
  */
-int evaluate(uint32_t virtual_addr, struct config *c)
+int translate(uint32_t virtualAddr, struct config *c)
 {
     // 1. Get vpn from virtual_addr
 
     // if pageOffsetBits = 4 ==> 000011...11111
-    uint32_t vpn_mask = ~(~0 << (32 - pageOffsetBits));
-    uint32_t vpn = vpn_mask & (virtual_addr >> pageOffsetBits);
+    uint32_t vpnMask = ~0 << (32 - pt->pageOffsetBits);
+    uint32_t vpn = (vpnMask & virtualAddr) >> pt->pageOffsetBits;
+    printf("vpn is %u\n", vpn);
+    // unsigned shift is LOGICAL!!!!
+    // offsetMask = 0000...001111
+    uint32_t offsetMask = (1 << pt->pageOffsetBits) - 1;
 
     // 2. Try to look into PTEA
+    if (c->pageTableRoot == -1) {
+        // TODO: handle null case
+    }
+
+    int ptPID = c->pageTableRoot;
+    int ptAddr = ptPID * c->pageSize;
+    int physicalAddr = -1;
+    uint32_t ppn;
+    if (pt->levels == 1) {
+        // I'm so fucking scared
+        uint32_t ptea = ptAddr + (vpn * sizeof(pte_t));
+        pte_t pte = (pte_t)(physicalMemory[ptea]);
+
+        // TODO: validity check of pte
+        // if (pte invalid) {
+        //     return -1;
+        // }
+
+        ppn = pte & (~0 << (32 - pt->pageOffsetBits));
+    } else {
+        printf("trying multi-level rn:\n");
+        printf("Levels of page table based on size %d: %d\n", c->pageSize, pt->levels);
+
+        uint32_t vpnBits = 32 - pt->pageOffsetBits;
+        if (vpnBits % pt->levels != 0)
+        {
+            printf("vpnBits = %u, pt->levels = %u illegal settings\n", vpnBits, pt->levels);
+            return -1;
+        }
+
+        uint32_t bitnum = vpnBits / pt->levels;
+        uint32_t vpnkMask = ((1 << bitnum) - 1) << (32 - bitnum);
+        for (int i = 0; i < pt->levels; i++)
+        {
+            uint32_t vpnk = (virtualAddr & vpnkMask) >> (32 - ((i + 1) * bitnum));
+            uint32_t ptea = ptAddr + (vpnk * sizeof(pte_t));
+            pte_t pte = *(pte_t *)(&(physicalMemory[ptea]));
+            printf("pte #%d at ptea 0x%x: 0x%x\n", i, ptea, pte);
+
+            // TODO: validity check of pte
+
+            ptAddr = pte & (~0 << pt->pageOffsetBits);
+            printf("ptAddr becomes: 0x%x\n", ptAddr);
+            vpnkMask >>= bitnum;
+        }
+        ppn = ptAddr;
+    }
+
+    physicalAddr = ppn | (virtualAddr & offsetMask);
+
+    // TODO: physicalAddr post processing
+    printf("physicalAddr: 0x%x for virtualAddr: 0x%x\n", physicalAddr, virtualAddr);
+
+    return physicalAddr;
 }
 
 // frame count * page size == total RAM size
-// vm-sim -t <trace> -o <page fault library> -p <page size> -V <verbose level> -n <frame count>
+// vm-sim -t <trace> -o <page fault library> -p <page offset bits> -V <verbose level> -n <frame count>
 int main(int argc, char** argv)
 {
-    char* traceName = NULL;
-    char* libName = NULL;
+    char traceName[100];
+    char libName[100];
 
-    int pageSize = 256;
-    pageOffsetBits = 0;
+    // int pageSize = 256;
+    int pageOffBits = 0;
 
-    bool read_t = false, read_o = false, read_n = false;
+    // TODO: read_o should be actual page fault library (fix the colon on getopt as well)
+    bool read_t = false, read_o = true, read_n = false;
 
     // Get opt of arguments
     // For now, page size is kept as optional
     int opt, nread;
-    while ((opt = getopt(argc, argv, "hVpt:o:n:")) != -1) {
+    while ((opt = getopt(argc, argv, "hVp:ot:n:")) != -1) {
         switch (opt) {
         case 'h':
             // print help function
@@ -129,7 +192,7 @@ int main(int argc, char** argv)
             read_o = nread == 1;
             break;
         case 'p':
-            nread = sscanf(optarg, "%d", &pageOffsetBits);
+            nread = sscanf(optarg, "%d", &pageOffBits);
             // read_p = nread == 1;
             break;
         case 'n':
@@ -159,30 +222,49 @@ int main(int argc, char** argv)
 
 
     // open page fault library
-    if (loadLibrary(libName) != 0)
-    {
+    // if (loadLibrary(libName) != 0)
+    // {
+    //
+    // }
 
-    }
-
+    // initialize meta variables
     struct config c;
-    c.pageSize = 1 << pageOffsetBits;
+    c.pageSize = 1 << pageOffBits;
     c.numFrames = frameCount;
-    c.pageTableRoot = 0;
+    c.pageTableRoot = -1;
     c.allocateFrame = allocateFrame;
     c.allocateSwap = allocateSwap;
     c.copyFromSwap = copyFromSwap;
     c.copyToSwap = copyToSwap;
-    initLibrary(&c);
+    // initLibrary(&c); TODO: change this back
+
+    pt = malloc(sizeof(struct pageTableHeader));
+    pt->pageOffsetBits = pageOffBits;
+    pt->levels = (32 - pageOffBits) / (pageOffBits - 2);
+
+    // physical memory initialization
+    physicalMemory = malloc(c.pageSize * c.numFrames);
+    printf("physical Memory has %d bytes\n", c.pageSize * c.numFrames);
+    c.pageTableRoot = 0;
+    *(pte_t *)(&(physicalMemory[4])) = 0x100;
+    *(pte_t *)(&(physicalMemory[c.pageSize + 8])) = 0x200;
+    *(pte_t *)(&(physicalMemory[c.pageSize * 2 + 12])) = 0x300;
+    *(pte_t *)(&(physicalMemory[c.pageSize * 3 + 16])) = 0x400;
+
+    printf("before trace\n");
 
     // open trace
     FILE* trace = fopen(traceName, "r");
     int addr = -1; // trace just going to be lines of uint32_t addr
     while (fscanf(trace, "%x\n", &addr) > 0)
     {
-        while (evaluate(addr, &c) != -1) {
-
+        uint32_t translated = 0;
+        if ((translated = translate(addr, &c)) == -1) {
+            pageFault(addr);
         }
     }
+
+    free(pt);
 
     return 0;
 }
