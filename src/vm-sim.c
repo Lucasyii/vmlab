@@ -23,6 +23,7 @@ char *swapSpace = NULL;
 struct pageTableHeader *pt;
 bool verbose = false;
 uint32_t validBitMask = 0x1;
+uint32_t lastPageFault = -1;
 
 int loadLibrary(char* fileName)
 {
@@ -163,10 +164,18 @@ int translate(uint32_t virtualAddr, struct config *c)
             printf("pte level #%d at ptea 0x%x: 0x%x\n", i, ptea, pte);
 
         if (!(pte & validBitMask)) {
+            // calls pageFault
             return -1;
         }
 
         ptAddr = pte & (~0 << pt->pageOffsetBits);
+
+        // (~0 << pt->pageOffsetBits) == -(c->pageSize)
+        if (ptAddr == -(c->pageSize)) {
+            // calls pageFault
+            return -1;
+        }
+
         if (verbose)
             printf("ptAddr becomes: 0x%x\n", ptAddr);
         vpnkMask >>= levelBits;
@@ -248,11 +257,10 @@ int main(int argc, char** argv)
         return 1;
     }
 
-
     // open page fault library
-    if (loadLibrary(libName) != 0)
-    {
-
+    if (loadLibrary(libName) != 0) {
+        fprintf(stderr, "Failed to load student library file\n");
+        return 1;
     }
 
     // initialize meta variables
@@ -274,27 +282,38 @@ int main(int argc, char** argv)
 
     // physical memory initialization
     physicalMemory = calloc(c.pageSize, c.numFrames);
-    printf("physical Memory has %d bytes\n", c.pageSize * c.numFrames);
     c.pageTableRoot = 0;
-    *(pte_t *)(&(physicalMemory[4])) = 0x101;
-    *(pte_t *)(&(physicalMemory[c.pageSize + 8])) = 0x201;
-    *(pte_t *)(&(physicalMemory[c.pageSize * 2 + 12])) = 0x300;
-    *(pte_t *)(&(physicalMemory[c.pageSize * 3 + 16])) = 0x400;
+    printf("physical Memory has %d bytes\n", c.pageSize * c.numFrames);
+    for (int i = 0; i < c.pageSize; i += sizeof(pte_t)) {
+        // null with 0's on meta data bits
+        *(pte_t *)(&(physicalMemory[i])) = -c.pageSize;
+    }
 
     printf("before trace\n");
 
     // open trace
     FILE* trace = fopen(traceName, "r");
     int addr = -1; // trace just going to be lines of uint32_t addr in hex
+    int pageFaultCount = 0;
     while (fscanf(trace, "%x\n", &addr) > 0)
     {
         uint32_t translated = 0;
         while ((translated = translate(addr, &c)) == -1) {
+            if (lastPageFault != addr) {
+                lastPageFault = addr;
+                pageFaultCount = 1;
+            } else {
+                if (++pageFaultCount > (pt->levels) + 2) {
+                    printf("stuck in a loop.. exiting\n");
+                    return 1;
+                }
+            }
             pageFault(addr);
         }
         printf("translated addr: 0x%x\n", translated);
     }
 
+    if (swapSpace != NULL) free(swapSpace);
     free(physicalMemory);
     free(pt);
 
