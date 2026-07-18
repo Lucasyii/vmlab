@@ -58,7 +58,7 @@ uint32_t allocateFrame(void) // frame is RAM
         frameCount == -1)
     {
         // initLibrary should call allocateFrame() to assign frame 0 as pageTableRoot
-        printf("allocating new frame!\n");
+        printf("allocating new frame %u!\n", nextFrame);
         return nextFrame++;
     }
 
@@ -73,6 +73,8 @@ uint32_t allocateSwap(void) // swap is Disk (extension of RAM)
         swapSpace = malloc(++nextSwap * pt->pageSize);
     else
         swapSpace = realloc(swapSpace, ++nextSwap * pt->pageSize);
+
+    printf("allocating new swap %u!\n", nextSwap);
 
     return nextSwap;
 }
@@ -139,6 +141,7 @@ int writePTE(uint32_t frame, uint32_t index, pte_t pte)
  */
 int translate(uint32_t virtualAddr, struct config *c)
 {
+    printf("----------------HARDWARE------------------\n");
     // 1. Get vpn from virtual_addr
 
     // if pageOffsetBits = 4 ==> 000011...11111
@@ -179,12 +182,6 @@ int translate(uint32_t virtualAddr, struct config *c)
         }
 
         ptAddr = pte & (~0 << pt->pageOffsetBits);
-
-        // (~0 << pt->pageOffsetBits) == -(c->pageSize)
-        if (ptAddr == -(c->pageSize)) {
-            // calls pageFault
-            return -1;
-        }
 
         if (verbose)
             printf("ptAddr becomes: 0x%x\n", ptAddr);
@@ -296,10 +293,6 @@ int main(int argc, char** argv)
     physicalMemory = calloc(c.pageSize, c.numFrames);
     c.pageTableRoot = 0;
     printf("physical Memory has %d bytes\n", c.pageSize * c.numFrames);
-    for (int i = 0; i < c.numFrames; i += sizeof(pte_t)) {
-        // null with 0's on meta data bits
-        *(pte_t *)(&(physicalMemory[i])) = -c.pageSize;
-    }
     printf("before trace\n");
 
     // open trace
@@ -310,7 +303,6 @@ int main(int argc, char** argv)
     {
         uint32_t translated = 0;
         while ((translated = translate(addr, &c)) == -1) {
-            printf("----------------HARDWARE------------------\n");
             if (lastPageFault != addr) {
                 lastPageFault = addr;
                 pageFaultCount = 1;

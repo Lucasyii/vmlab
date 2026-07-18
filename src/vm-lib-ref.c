@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include "vm-api.h"
 
 uint32_t (*allocateFrame)(void) = NULL;
@@ -14,6 +15,10 @@ int pageSize = 0;
 int pageTableFrame = 0;
 int validMask = 0x1;
 int offSetBits = 0;
+int swapCount = 0;
+int numFrames = 0;
+int *lru = NULL;
+int lruCount = 0;
 
 //
 // initLibrary is what happens to virtual memory during
@@ -33,17 +38,38 @@ int initLibrary(struct config* conf)
     writePTE = conf->writePTE;
     pageSize = conf->pageSize;
     offSetBits = conf->offsetBits;
+    numFrames = conf->numFrames;
 
     conf->pageTableRoot = allocateFrame();
     pageTableFrame = conf->pageTableRoot;
 
+    lru = malloc(conf->numFrames * sizeof(int));
+
     return 0;
 }
 
+bool swapExists(int swapID)
+{
+    return swapID < swapCount;
+}
+
 // TODO: implement LRU
+// LRU is just going to be based on last page faulted not actually used for now
 uint32_t findEvict(void)
 {
-    return 10;
+    int min = lru[0];
+    int minidx = 0;
+
+    // Loop through the rest of the elements
+    for (int i = 1; i < numFrames; i++) {
+        if (lru[i] < min && i != pageTableFrame) {
+            min = lru[i]; // Found a smaller one, update min
+            minidx = i;
+        }
+    }
+
+    printf("findEvict returning with index: %d\n", minidx);
+    return minidx;
 }
 
 //
@@ -67,50 +93,52 @@ void pageFault(uint32_t address)
         printf("vpnkMask: 0x%x, vpnk: 0x%x\n", vpnkMask, vpnk);
         pte_t pte = getPTE(currFrame, vpnk);
 
-        // upper bits all 1, pte is null
-        printf("-pageSize = 0x%x, pte = 0x%x\n", -pageSize, pte);
-        if ((pte & (-pageSize)) == (-pageSize)) {
-            printf("null page table entry\n");
-            pte_t newpte;
+        if (!(pte & validMask)) { // found invalid!
+            int swapID = (pte & (-pageSize)) >> offSetBits;
+            if (swapExists(swapID)) {
+                int evictingFrame = findEvict();
+                copyFromSwap(swapID, evictingFrame);
+                writePTE(currFrame, vpnk, pte | validMask);
+                lru[currFrame] = ++lruCount;
+                return;
+            } else {
+                printf("swap not found :(\n");
+                pte_t newpte;
 
-            // try allocating a page for it
-            int newFrame = allocateFrame();
-            if (newFrame != 0) { // frame allocation succeed!
+                // try allocating a page for it
+                int newFrame = allocateFrame();
+                if (newFrame != 0) { // frame allocation succeed!
 
-                newpte = newFrame << offSetBits;
+                    newpte = newFrame << offSetBits;
+                    newpte |= validMask; // valid bit
+
+                    if (writePTE(currFrame, vpnk, newpte) == -1) {
+                        printf("writePTE failed :(\n");
+                        exit(1);
+                    }
+                    lru[currFrame] = ++lruCount;
+                    return;
+                }
+
+                // need to swap out a frame and get a free page
+                int newSwap = allocateSwap();
+                if (newSwap == -1) {
+                    printf("allocate Swap failed :(\n");
+                    exit(1);
+                }
+                swapCount++;
+
+                int evictingFrame = findEvict();
+                copyToSwap(evictingFrame, newSwap);
+                newpte = evictingFrame << offSetBits;
                 newpte |= validMask; // valid bit
-
                 if (writePTE(currFrame, vpnk, newpte) == -1) {
                     printf("writePTE failed :(\n");
                     exit(1);
                 }
+                lru[currFrame] = ++lruCount;
                 return;
             }
-
-            // need to swap out a frame and get a free page
-            int newSwap = allocateSwap();
-            if (newSwap == -1) {
-                printf("allocate Swap failed :(\n");
-                exit(1);
-            }
-
-            int evictingFrame = findEvict();
-            copyToSwap(evictingFrame, newSwap);
-            newpte = evictingFrame << offSetBits;
-            newpte |= validMask; // valid bit
-            if (writePTE(currFrame, vpnk, newpte) == -1) {
-                printf("writePTE failed :(\n");
-                exit(1);
-            }
-            return;
-        }
-
-        if (!(pte & validMask)) { // swap exists, just not in memory
-            int swapID = pte & (-pageSize) >> offSetBits;
-            int evictingFrame = findEvict();
-            copyFromSwap(swapID, evictingFrame);
-            writePTE(currFrame, vpnk, pte | validMask);
-            return;
         }
 
         currFrame = (pte & (-pageSize)) >> offSetBits;
