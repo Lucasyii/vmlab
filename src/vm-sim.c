@@ -24,6 +24,7 @@ struct pageTableHeader *pt;
 bool verbose = false;
 uint32_t validBitMask = 0x1;
 uint32_t lastPageFault = -1;
+int frameCount = -1;
 
 int loadLibrary(char* fileName)
 {
@@ -49,7 +50,6 @@ int loadLibrary(char* fileName)
     return 0;
 }
 
-int frameCount = -1;
 uint32_t allocateFrame(void) // frame is RAM
 {
     // Frame 0 is the root of the page table
@@ -57,7 +57,9 @@ uint32_t allocateFrame(void) // frame is RAM
     if (nextFrame < (uint32_t)frameCount ||
         frameCount == -1)
     {
-        return ++nextFrame;
+        // initLibrary should call allocateFrame() to assign frame 0 as pageTableRoot
+        printf("allocating new frame!\n");
+        return nextFrame++;
     }
 
     return 0;
@@ -102,7 +104,10 @@ void copyFromSwap(uint32_t swap, uint32_t frame)
 pte_t getPTE(uint32_t frame, uint32_t index)
 {
     uint32_t ptea = frame * pt->pageSize + (index * sizeof(pte_t));
-    return *(pte_t *)(&(physicalMemory[ptea]));
+    pte_t pte = *(pte_t *)(&(physicalMemory[ptea]));
+    printf("frame: 0x%x, index: 0x%x, pageSize: %u, ptea: 0x%x, pte: 0x%x\n",
+            frame, index, pt->pageSize, ptea, pte);
+    return pte;
 }
 
 /*
@@ -115,6 +120,11 @@ pte_t getPTE(uint32_t frame, uint32_t index)
 int writePTE(uint32_t frame, uint32_t index, pte_t pte)
 {
     uint32_t ptea = frame * pt->pageSize + (index * sizeof(pte_t));
+    if (ptea > pt->pageSize * frameCount) {
+        fprintf(stderr, "call to writePTE(%u, %u, %x) out of bounds",
+                frame, index, pte);
+        return -1;
+    }
     *(pte_t *)(&(physicalMemory[ptea])) = pte;
     return 0;
 }
@@ -274,21 +284,22 @@ int main(int argc, char** argv)
     c.copyToSwap = copyToSwap;
     c.getPTE = getPTE;
     c.writePTE = writePTE;
+    c.offsetBits = pageOffBits;
     initLibrary(&c);
 
     pt = malloc(sizeof(struct pageTableHeader));
     pt->pageOffsetBits = pageOffBits;
+    pt->pageSize = c.pageSize;
     pt->levels = (32 - pageOffBits) / (pageOffBits - 2);
 
     // physical memory initialization
     physicalMemory = calloc(c.pageSize, c.numFrames);
     c.pageTableRoot = 0;
     printf("physical Memory has %d bytes\n", c.pageSize * c.numFrames);
-    for (int i = 0; i < c.pageSize; i += sizeof(pte_t)) {
+    for (int i = 0; i < c.numFrames; i += sizeof(pte_t)) {
         // null with 0's on meta data bits
         *(pte_t *)(&(physicalMemory[i])) = -c.pageSize;
     }
-
     printf("before trace\n");
 
     // open trace
@@ -299,6 +310,7 @@ int main(int argc, char** argv)
     {
         uint32_t translated = 0;
         while ((translated = translate(addr, &c)) == -1) {
+            printf("----------------HARDWARE------------------\n");
             if (lastPageFault != addr) {
                 lastPageFault = addr;
                 pageFaultCount = 1;

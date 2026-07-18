@@ -27,6 +27,7 @@ typedef uint32_t pte_t;
 // extern int writePTE(uint32_t frame, uint32_t index, pte_t pte);
 
 struct config {
+    int offsetBits; // wanna get rid of this
     int pageSize;
     int numFrames;
     int pageTableRoot; // -1 if null/root not in memory, else, PA in RAM

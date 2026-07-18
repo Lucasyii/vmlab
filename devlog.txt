@@ -97,4 +97,6 @@ Necessary implementations:
 
     - Still have no idea what initLibrary does
 
-    - PTBR can be null
+    - PTBR can be null?
+        => Only if context switching is implemented and additional traces
+           are made to test it
