@@ -23,8 +23,12 @@ char *swapSpace = NULL;
 struct pageTableHeader *pt;
 bool verbose = false;
 uint32_t validBitMask = 0x1;
+uint32_t refBitMask = 0x2;
+uint32_t softBitMask = 0x4;
 uint32_t lastPageFault = -1;
 int frameCount = -1;
+int demoteLimit = 10;
+uint32_t swapCount = 0;
 
 int loadLibrary(char* fileName)
 {
@@ -67,33 +71,55 @@ uint32_t allocateFrame(void) // frame is RAM
 
 uint32_t allocateSwap(void) // swap is Disk (extension of RAM)
 {
-    static uint32_t nextSwap = 0;
-
-    if (nextSwap == 0)
-        swapSpace = malloc(++nextSwap * pt->pageSize);
+    if (swapCount == 0)
+        swapSpace = malloc(pt->pageSize);
     else
-        swapSpace = realloc(swapSpace, ++nextSwap * pt->pageSize);
+        swapSpace = realloc(swapSpace, ++swapCount * pt->pageSize);
 
-    printf("allocating new swap %u!\n", nextSwap);
+    memset(swapSpace, 0, swapCount * pt->pageSize);
+    printf("allocating new swap %u!\n", swapCount);
 
-    return nextSwap;
+    return swapCount;
 }
 
 void copyToSwap(uint32_t frame, uint32_t swap)
 {
-    // need to make sure memory not overlapping
-    memcpy(&(physicalMemory[frame * pt->pageSize]),
-           &(swapSpace[frame * swap]),
-           pt->pageSize);
+    printf("copyToSwap= frame: %u, swap: %u\n", frame, swap);
+
+    if (frame == -1) {
+        memcpy(pt->tmpSwap,
+               &(swapSpace[pt->pageSize * swap]),
+               pt->pageSize);
+    } else if (swap == -1) {
+        memcpy(&(physicalMemory[frame * pt->pageSize]),
+               pt->tmpSwap,
+               pt->pageSize);
+    } else {
+        // need to make sure memory not overlapping
+        memcpy(&(physicalMemory[frame * pt->pageSize]),
+               &(swapSpace[pt->pageSize * swap]),
+               pt->pageSize);
+    }
     return;
 }
 
 void copyFromSwap(uint32_t swap, uint32_t frame)
 {
-    // need to make sure memory not overlapping
-    memcpy(&(swapSpace[frame * swap]),
-           &(physicalMemory[frame * pt->pageSize]),
-           pt->pageSize);
+    printf("copyFromSwap= swap: %u, frame: %u\n", swap, frame);
+    if (frame == -1) {
+        memcpy(pt->tmpSwap,
+               &(physicalMemory[frame * pt->pageSize]),
+               pt->pageSize);
+    } else if (swap == -1) {
+        memcpy(&(swapSpace[pt->pageSize * swap]),
+               pt->tmpSwap,
+               pt->pageSize);
+    } else {
+        // need to make sure memory not overlapping
+        memcpy(&(swapSpace[pt->pageSize * swap]),
+               &(physicalMemory[frame * pt->pageSize]),
+               pt->pageSize);
+    }
     return;
 }
 
@@ -103,12 +129,12 @@ void copyFromSwap(uint32_t swap, uint32_t frame)
  * @param[in] index: Index page table entry index
  * @param[out]  pte: page table entry according to indexing
  */
-pte_t getPTE(uint32_t frame, uint32_t index)
+pte_t *getPTE(uint32_t frame, uint32_t index)
 {
     uint32_t ptea = frame * pt->pageSize + (index * sizeof(pte_t));
-    pte_t pte = *(pte_t *)(&(physicalMemory[ptea]));
-    printf("frame: 0x%x, index: 0x%x, pageSize: %u, ptea: 0x%x, pte: 0x%x\n",
-            frame, index, pt->pageSize, ptea, pte);
+    pte_t *pte = (pte_t *)(&(physicalMemory[ptea]));
+    // printf("getPTE= frame: 0x%x, index: 0x%x, pageSize: %u, ptea: 0x%x, pte: 0x%x\n",
+    //         frame, index, pt->pageSize, ptea, pte);
     return pte;
 }
 
@@ -121,6 +147,7 @@ pte_t getPTE(uint32_t frame, uint32_t index)
  */
 int writePTE(uint32_t frame, uint32_t index, pte_t pte)
 {
+    printf("writePTE = frame: 0x%x, index: 0x%x, pte: 0x%x\n", frame, index, pte);
     uint32_t ptea = frame * pt->pageSize + (index * sizeof(pte_t));
     if (ptea > pt->pageSize * frameCount) {
         fprintf(stderr, "call to writePTE(%u, %u, %x) out of bounds",
@@ -129,6 +156,67 @@ int writePTE(uint32_t frame, uint32_t index, pte_t pte)
     }
     *(pte_t *)(&(physicalMemory[ptea])) = pte;
     return 0;
+}
+
+/*
+ * @brief recursively demotes ptes down this order:
+ *        1. valid bit & ref bit
+ *        2. valid bit & ~ref bit
+ *        3. ~valid bit & ~ref bit & soft bit
+ *   Note that the path down to a normal page bit should be in descending order
+ * of the sets
+ * @param[in] pageTableRoot: Starting physical address of root of page table
+ * @param[out]       result: 0 on success, -1 on failure
+ */
+int demoteBits(uint32_t pageTableRoot, uint32_t level) {
+    if (level == 1)
+        printf("calling demoteBits\n");
+    if (level == pt->levels)
+        return 0;
+
+    uint32_t pageSize = pt->pageSize;
+    uint32_t ppnMask = ~(pageSize - 1);
+    for (uint32_t currAddr = pageTableRoot; currAddr < pageSize; currAddr += sizeof(pte_t))
+    {
+        pte_t *pte = (pte_t *)(&(physicalMemory[currAddr]));
+        if (*pte & refBitMask) {
+            *pte &= ~refBitMask; // clear out ref bit
+            if (demoteBits(*pte & ppnMask, level + 1) == -1)
+                return -1;
+        } else if (*pte & validBitMask) {
+            *pte &= (~validBitMask); // clear out valid bit
+            *pte |= softBitMask; // set soft page fault bit
+            if (demoteBits(*pte & ppnMask, level + 1) == -1)
+                return -1;
+        }
+    }
+    return 0;
+}
+
+void printMemory(struct config *c)
+{
+    for (int i = 0; i < c->numFrames; i++) {
+        printf("\n-----------------page index %d--------------\n", i);
+        for (int j = 0; j < c->pageSize; j += sizeof(pte_t)) {
+            if (j != 0 && j % (sizeof(pte_t) * 4) == 0) printf("\n");
+            pte_t *pte = (pte_t *)(&(physicalMemory[i * c->pageSize + j]));
+            printf("0x%x ", *pte);
+        }
+    }
+    return;
+}
+
+void printSwap(struct config *c)
+{
+    for (int i = 0; i < swapCount; i++) {
+        printf("\n-----------------swap index %d--------------\n", i);
+        for (int j = 0; j < c->pageSize; j += sizeof(pte_t)) {
+            if (j != 0 && j % (sizeof(pte_t) * 4) == 0) printf("\n");
+            pte_t *pte = (pte_t *)(&(swapSpace[i * c->pageSize + j]));
+            printf("0x%x ", *pte);
+        }
+    }
+
 }
 
 /*
@@ -141,14 +229,14 @@ int writePTE(uint32_t frame, uint32_t index, pte_t pte)
  */
 int translate(uint32_t virtualAddr, struct config *c)
 {
-    printf("----------------HARDWARE------------------\n");
+    printf("\n----------------HARDWARE------------------\n");
     // 1. Get vpn from virtual_addr
 
     // if pageOffsetBits = 4 ==> 000011...11111
     uint32_t vpnBits = 32 - pt->pageOffsetBits;
     uint32_t offsetMask = (1 << pt->pageOffsetBits) - 1; // offsetMask = 0000...001111
 
-    printf("translate called\n");
+    printf("translate called for addr: 0x%x\n",virtualAddr);
     // 2. Try to look into PTEA
     if (c->pageTableRoot == -1) {
         fprintf(stderr, "pageTableRoot should NEVER be null during a trace\n");
@@ -162,7 +250,7 @@ int translate(uint32_t virtualAddr, struct config *c)
     }
 
     // Physical address of page table
-    int ptAddr = c->pageTableRoot * c->pageSize;
+    int ptAddr = c->pageTableRoot;
     int physicalAddr = -1;
 
     // vpnMask is a sliding window of bits that moves for every round
@@ -172,16 +260,20 @@ int translate(uint32_t virtualAddr, struct config *c)
     {
         uint32_t vpnk = (virtualAddr & vpnkMask) >> (32 - (i * levelBits));
         uint32_t ptea = ptAddr + (vpnk * sizeof(pte_t));
-        pte_t pte = *(pte_t *)(&(physicalMemory[ptea]));
+        pte_t *pte = (pte_t *)(&(physicalMemory[ptea]));
         if (verbose)
-            printf("pte level #%d at ptea 0x%x: 0x%x\n", i, ptea, pte);
+            printf("pte level #%d at ptea 0x%x: 0x%x\n", i, ptea, *pte);
 
-        if (!(pte & validBitMask)) {
+        if (!(*pte & validBitMask)) {
             // calls pageFault
             return -1;
         }
 
-        ptAddr = pte & (~0 << pt->pageOffsetBits);
+        if (!(*pte & refBitMask)) { // referenced this page table entry!
+            *pte |= refBitMask;
+        }
+
+        ptAddr = *pte & (~0 << pt->pageOffsetBits);
 
         if (verbose)
             printf("ptAddr becomes: 0x%x\n", ptAddr);
@@ -281,13 +373,15 @@ int main(int argc, char** argv)
     c.copyToSwap = copyToSwap;
     c.getPTE = getPTE;
     c.writePTE = writePTE;
-    c.offsetBits = pageOffBits;
+    c.offsetBits = pageOffBits; // wanna get rid of this
+    c.tmpSwap = malloc(c.pageSize);
     initLibrary(&c);
 
     pt = malloc(sizeof(struct pageTableHeader));
     pt->pageOffsetBits = pageOffBits;
     pt->pageSize = c.pageSize;
     pt->levels = (32 - pageOffBits) / (pageOffBits - 2);
+    pt->tmpSwap = c.tmpSwap;
 
     // physical memory initialization
     physicalMemory = calloc(c.pageSize, c.numFrames);
@@ -299,11 +393,19 @@ int main(int argc, char** argv)
     FILE* trace = fopen(traceName, "r");
     int addr = -1; // trace just going to be lines of uint32_t addr in hex
     int pageFaultCount = 0;
+    int demoteCount = 0;
     while (fscanf(trace, "%x\n", &addr) > 0)
     {
         uint32_t translated = 0;
         while ((translated = translate(addr, &c)) == -1) {
-            if (lastPageFault != addr) {
+            if (demoteCount++ == demoteLimit) {
+                if (demoteBits(c.pageTableRoot, 1) == -1) {
+                    printf("demoteBits returned -1\n");
+                    exit(1);
+                }
+                demoteCount = 0;
+            }
+            if (lastPageFault != addr) { // checking if we're stuck in a loop
                 lastPageFault = addr;
                 pageFaultCount = 1;
             } else {
@@ -313,11 +415,16 @@ int main(int argc, char** argv)
                 }
             }
             pageFault(addr);
+            printMemory(&c);
         }
+
+        printSwap(&c);
+        printf("\n----------------FOUND TRASLATION!-----------------\n");
         printf("translated addr: 0x%x\n", translated);
     }
 
     if (swapSpace != NULL) free(swapSpace);
+    free(c.tmpSwap);
     free(physicalMemory);
     free(pt);
 

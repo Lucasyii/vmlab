@@ -23,9 +23,9 @@ Based on my understanding of VM, and the specs mentioned in the starter code:
     - Physical RAM space may not be as big as entire virtual address space
          => Can't represent entire VA space in PA space
          => Need extra PA space to give illusion to processes that it has entire
-           VA space
+            VA space
          => Swap space is allocated area in disk space that pages can live
-           temporarily as OS deals with more active pages
+            temporarily as OS deals with more active pages
          => allocateSwap() returns swap space id
 
     - uint32_t allocateFrame(void)
@@ -56,6 +56,35 @@ Based on my understanding of VM, and the specs mentioned in the starter code:
 
     - Potential swappiness implementation
 
+    - PTBR holds a physical address, NOT frame id
+
+    - Reference bit
+         => Doesn't actually mean that something is referencing it right now
+         => Only marks that something has referenced that page entry since
+            the last time the OS cleared it
+         => OS should clear it after a certain amount of "time" (= # of access)
+         =>
+
+According to textbook, this is how the page fault handler should work:
+
+    1 Check if virtual address is legal.
+         => Does the address lie in are defined by some area struct?
+         => Page fault handler should go through list of area structs, comparing
+            vm_start and vm_end for each of them.
+         => If address not legal, trigger segmentation fault
+
+    2 Attempted memory access legal?
+         => Permission to do what the address request is wanting to do?
+         => Permission to read, write, execute pages in the area?
+         => If not legal, throw protection exception (terminates process).
+
+    3 Kernel now konws page fault is legal operation on legal virtual address.
+         => Handle the fault by:
+             a. select a victim page (clock/second-chance algorithm)
+             b. swaps out the victim page if it's dirty (does this mean swap space?)
+             c. swaps in new page
+             d. updates page table
+
 Necessary implementations:
 
     - Simulated RAM space based on page_size & frame_count
@@ -80,7 +109,7 @@ Necessary implementations:
             => Physical Page Number                    [< 32 - # of other bits]
             => Present/Absent (Valid) Bit              [1 bit]
         => Optional Fields to make it harder:
-            => Referenced Bit:                         [1 bit]
+            => Referenced Bit:                         [1 bit] // implementing this now!
                 * 1 if being used by other processes
                 * 0 otherwise
                 * This could be for LRU purposes
