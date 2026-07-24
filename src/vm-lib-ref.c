@@ -21,6 +21,7 @@ int swapCount = 0;
 int numFrames = 0;
 int pageTableLevels = 0;
 char *tmpSwap = NULL;
+uint32_t *protected = NULL;
 
 //
 // initLibrary is what happens to virtual memory during
@@ -56,69 +57,57 @@ bool swapExists(int swapID)
     return swapID < swapCount;
 }
 
-// TODO: implement clock algorithm
-// Should return address of pte to evict
-pte_t *findEvict(uint32_t ptableFrame, uint32_t levels, char *foundSet3)
+bool isProtected(uint32_t frame)
 {
-    if (levels == 1) {
-        char foundBest = 0;
-        foundSet3 = &foundBest;
-        printf("findEvict called\n");
-    }
+    for (int i = 0; i < pageTableLevels; i++)
+        if (protected[i] == frame)
+            return true;
+    return false;
+}
 
-    uint32_t ppnMask = ~(pageSize - 1);
+pte_t *findEvictHelper(uint32_t ptableFrame, uint32_t levels, uint32_t bits)
+{
+    pte_t *evictingFramePTE = NULL;
+    pte_t *currLevelPTE = NULL;
 
-    // final level
-    if (levels == pageTableLevels) {
-        printf("reached final level\n");
-        printf("pte's at final level:\n");
-        pte_t *retPTE = NULL;
-        for (int i = 0; i < (pageSize / sizeof(pte_t)); i++) {
-            pte_t *pte = getPTE(ptableFrame, i);
-            printf("    pte: 0x%x\n", *pte);
+    // loop through each page table entry
+    for (int i = 0; i < (pageSize / sizeof(pte_t)); i++) {
+        pte_t *pte = getPTE(ptableFrame, i);
+        uint32_t pteBits = *pte & 0x7;
 
-            if (!(*pte & refMask)) {
-                if (!(*pte & validMask) && (*pte & softMask)) {
-                    // set 3 (~valid bit, ~ref bit, soft bit)
-                    *foundSet3 = 1;
+        if (pteBits == bits) {
+            if (levels != pageTableLevels) {
+                evictingFramePTE = findEvictHelper(*pte >> offSetBits, levels+1, bits);
+                if (evictingFramePTE != NULL)
+                    return evictingFramePTE;          // once lower level found, we want that
+                if (!isProtected(*pte >> offSetBits)) // this level valid pte
+                    currLevelPTE = pte;
+            } else {
+                if (!isProtected(*pte >> offSetBits)) // lowest level valid pte
                     return pte;
-                } else if (*pte & validMask) { // set 2 (valid bit + ~ref bit)
-                    retPTE = pte;
-                }
-            } else if ((*pte & validMask) && retPTE == NULL) { // set 1 (valid bit + ref bit)
-                retPTE = pte;
             }
         }
-
-        return retPTE;
     }
 
-    // recursively look downwards
-    pte_t *evictingFramePTE = NULL;
-    for (int i = 0; i < (pageSize / sizeof(pte_t)); i++) {
-        pte_t pte = *getPTE(ptableFrame, i);
-        for (int j = 0; j < levels - 1; j++) printf("    ");
-        printf("currpte: 0x%x level %d\n", pte, levels);
-        if (pte & validMask) { // only go down if valid mask
-            printf("going down:\n");
-            pte_t *tmp = findEvict((pte & ppnMask) >> offSetBits, levels+1, foundSet3);
-            if (tmp != NULL)
-                evictingFramePTE = tmp;
-        }
-        if (evictingFramePTE != NULL && (*foundSet3 == 1)) {
-            if (levels == 1)
-                printf("returning evictingFramePTE:0x%x set 3 return!\n", *evictingFramePTE);
-            return evictingFramePTE;
-        }
-    }
-    if (levels == 1) {
-        if (evictingFramePTE == NULL) {
-            printf("evictingFramePTE is NULL!!\n");
-            // exit(1);
-        }
-        printf("returning evictingFramePTE:0x%x non-set 3 return\n", *evictingFramePTE);
-    }
-    return evictingFramePTE;
+    // no found underneath
+    return currLevelPTE;
+}
+
+// Should return address of pte to evict
+// Check one at a time.. There HAS to be a way to make it better
+// TODO: make this algorithm more efficient
+pte_t *findEvict(void)
+{
+    pte_t *evictingFramePTE = findEvictHelper(pageTableFrame, 1, softMask); // set 3
+    if (evictingFramePTE != NULL)
+        return evictingFramePTE;
+
+    evictingFramePTE = findEvictHelper(pageTableFrame, 1, validMask | refMask); // set 2
+    if (evictingFramePTE != NULL)
+        return evictingFramePTE;
+
+    printf("we have to evict a valid one gng :sob:\n");
+    return findEvictHelper(pageTableFrame, 1, validMask); // set 1
 }
 
 //
@@ -136,17 +125,23 @@ void pageFault(uint32_t address)
     uint32_t levels = (32 - offSetBits) / (offSetBits - 2);
     uint32_t levelBits = (32 - offSetBits) / levels;
     uint32_t vpnkMask = ((1 << levelBits) - 1) << (32 - levelBits);
+
+    protected = malloc(sizeof(uint32_t) * levels);
+    for (int i = 0; i < levels; i++) protected[i] = pageTableFrame;
+
     for (int i = 1; i <= levels; i++)
     {
         uint32_t vpnk = (address & vpnkMask) >> (32 - (i * levelBits));
         printf("vpnkMask: 0x%x, vpnk: 0x%x\n", vpnkMask, vpnk);
         pte_t pte = *getPTE(currFrame, vpnk);
+        protected[i-1] = currFrame;
 
         // as I'm going down, the invalid one is the only that matters
         if (!(pte & validMask)) {
             if (!(pte & refMask) && (pte & softMask)) { // soft fault phew!
                 // just toggle valid mask and we move on
                 writePTE(currFrame, vpnk, pte | validMask);
+                free(protected);
                 return;
             } else if ((pte & refMask) && !(pte & softMask)) { // hard fault + swap
                 uint32_t swapID = (pte & ~(pageSize - 1)) >> offSetBits;
@@ -157,7 +152,7 @@ void pageFault(uint32_t address)
                     exit(1);
                 }
 
-                pte_t *evictingPTE = findEvict(pageTableFrame, 1, NULL);
+                pte_t *evictingPTE = findEvict();
                 uint32_t evictingFrame = (*evictingPTE & ~(pageSize - 1)) >> offSetBits;
                 // switch swap frame galaxy
                 copyToSwap(evictingFrame, -1); // copy to tmp
@@ -165,17 +160,18 @@ void pageFault(uint32_t address)
                 copyToSwap(-1, swapID);
 
                 *evictingPTE = (((swapID << offSetBits) & (~validMask)) | refMask) & (~softMask);
-                writePTE(currFrame, vpnk, (pte | validMask) & (~refMask));
+                writePTE(currFrame, vpnk, ((evictingFrame << offSetBits) | validMask) & (~refMask));
                 return;
             } else if (!(pte & refMask) && !(pte & softMask)) { // hard fault + null
                 uint32_t frame;
                 if ((frame = allocateFrame()) != 0) {
                     pte_t newPTE = frame << offSetBits | validMask;
                     writePTE(currFrame, vpnk, newPTE);
+                    free(protected);
                     return;
                 }
                 // no more space..
-                pte_t *evictingPTE = findEvict(pageTableFrame, 1, NULL);
+                pte_t *evictingPTE = findEvict();
                 uint32_t evictingFrame = (*evictingPTE & ~(pageSize - 1)) >> offSetBits;
                 // switch swap frame galaxy
                 uint32_t newSwap = allocateSwap();
@@ -184,7 +180,8 @@ void pageFault(uint32_t address)
                 copyToSwap(-1, newSwap);
 
                 *evictingPTE = (((newSwap << offSetBits) & (~validMask)) | refMask) & (~softMask);
-                writePTE(currFrame, vpnk, (evictingFrame | validMask) & (~refMask));
+                writePTE(currFrame, vpnk, ((evictingFrame << offSetBits) | validMask) & (~refMask));
+                free(protected);
                 return;
             }
         }
@@ -193,5 +190,6 @@ void pageFault(uint32_t address)
         vpnkMask >>= levelBits;
     }
     printf("nothing wrong?\n");
+    free(protected);
     return;
 }
