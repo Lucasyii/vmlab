@@ -1,0 +1,31 @@
+
+    Log of possible bugs students might run into
+
+--------------------------------------------------
+
+Walking down page table incorrectly:
+    - make sure that they are calculating the vpn's correctly and have a proper
+      moving window of bit masks to get the next index
+    - Sometimes, they may forget a ~ on the offsetMask which may result in 0's
+      for their next index/frame
+
+Evicting frames that are used in the current translation path:
+    - if frames that are being used to translate the current virtual address
+      gets evicted, there may be a case in which pageFault gets called
+      infinitely many times, causing a loop.
+    - Fix I came up with is just keep an array that holds all the frameIDs
+      that shouldn't be evicted and checks whenever findEvict tries to return a
+      frame
+
+Not updating the corresponding page table entry when evicting a frame:
+    - When a frame gets evicted, the page table entry that was mapping to that
+      frame needs to update. If not updated correctly, the same page table
+      entry may be used to access an evicted frame which is undesired behavior
+    - The bits like soft bit, ref bit checking is needed
+
+Not differentiating between NULL pte's and swap pte's:
+    - When valid bit is off on a pte, it just means that the page table entry
+      is not valid. It doesn't say anything about whether the frame that it's
+      pointing to is even a valid frame, swap ID, or whatever else..
+    - Either they use a bit to indicate that it has a swap number, or have
+      some other data structure they're keeping track of swapID

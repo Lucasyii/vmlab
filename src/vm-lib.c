@@ -7,7 +7,7 @@ uint32_t (*allocateFrame)(void) = NULL;
 uint32_t (*allocateSwap)(void) = NULL;
 void (*copyToSwap)(uint32_t, uint32_t) = NULL;
 void (*copyFromSwap)(uint32_t, uint32_t) = NULL;
-pte_t (*getPTE)(uint32_t frame, uint32_t index) = NULL;
+pte_t *(*getPTE)(uint32_t frame, uint32_t index) = NULL;
 int (*writePTE)(uint32_t frame, uint32_t index, pte_t pte) = NULL;
 
 //

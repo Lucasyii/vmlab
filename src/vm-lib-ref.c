@@ -59,9 +59,9 @@ bool swapExists(int swapID)
 
 void printProtected(void)
 {
-    printf("Protected frames: ");
-    for (int i = 0; i < pageTableLevels; i++) {
-        printf("%d, ", protected[i]);
+    printf("Protected frames: %d", protected[0]);
+    for (int i = 1; i < pageTableLevels; i++) {
+        printf(", %d", protected[i]);
     }
     printf("\n");
     return;
@@ -85,14 +85,13 @@ pte_t *findEvictHelper(uint32_t ptableFrame, uint32_t levels, uint32_t bits)
         pte_t *pte = getPTE(ptableFrame, i);
         uint32_t pteBits = *pte & 0x7;
 
-        if (*pte != 0)
-            printf("non-zero pte: 0x%x\n", *pte);
         if ((pteBits & validMask) || (pteBits & softMask)) {
-            printf("checking frame %d index %d as pteBits valid or soft\n", ptableFrame, i);
             if (levels != pageTableLevels) {
                 evictingFramePTE = findEvictHelper(*pte >> offSetBits, levels+1, bits);
+
                 if (evictingFramePTE != NULL)
                     return evictingFramePTE;          // once lower level found, we want that
+
                 if (pteBits == bits && !isProtected(*pte >> offSetBits)) { // this level valid pte
                     printf("frame %d is NOT protected\n", *pte >> offSetBits);
                     currLevelPTE = pte;
@@ -160,23 +159,26 @@ void pageFault(uint32_t address)
                 free(protected);
                 return;
             } else if ((pte & refMask) && !(pte & softMask)) { // hard fault + swap
-                uint32_t swapID = (pte & ~(pageSize - 1)) >> offSetBits;
+                uint32_t swapID = pte >> offSetBits;
 
-                if (allocateFrame() != 0) {
+                if (allocateFrame() != 0) { // should never occur
                     printf("swapID before all frames fully allocated! "
                            "frame: %d, index: %d, pte: 0x%x\n", currFrame, vpnk, pte);
                     exit(1);
                 }
 
                 pte_t *evictingPTE = findEvict();
-                uint32_t evictingFrame = (*evictingPTE & ~(pageSize - 1)) >> offSetBits;
-                // switch swap frame galaxy
+                uint32_t evictingFrame = *evictingPTE >> offSetBits;
+
+                // swaps the evictingFrame & swapID page!
                 copyToSwap(evictingFrame, -1); // copy to tmp
                 copyFromSwap(swapID, evictingFrame);
                 copyToSwap(-1, swapID);
 
+                // ref bit used to indicate that ppn holding swap ID & differentiate from null
                 *evictingPTE = (((swapID << offSetBits) & (~validMask)) | refMask) & (~softMask);
                 writePTE(currFrame, vpnk, ((evictingFrame << offSetBits) | validMask) & (~refMask));
+                free(protected);
                 return;
             } else if (!(pte & refMask) && !(pte & softMask)) { // hard fault + null
                 uint32_t frame;
@@ -186,15 +188,18 @@ void pageFault(uint32_t address)
                     free(protected);
                     return;
                 }
+
                 // no more space..
                 pte_t *evictingPTE = findEvict();
-                uint32_t evictingFrame = (*evictingPTE & ~(pageSize - 1)) >> offSetBits;
-                // switch swap frame galaxy
+                uint32_t evictingFrame = *evictingPTE >> offSetBits;
+
+                // shove the evictingFrame into newSwap page!
                 uint32_t newSwap = allocateSwap();
                 copyToSwap(evictingFrame, -1); // copy to tmp
                 copyFromSwap(newSwap, evictingFrame);
                 copyToSwap(-1, newSwap);
 
+                // ref bit used to indicate that ppn holding swap ID & differentiate from null
                 *evictingPTE = (((newSwap << offSetBits) & (~validMask)) | refMask) & (~softMask);
                 writePTE(currFrame, vpnk, ((evictingFrame << offSetBits) | validMask) & (~refMask));
                 free(protected);
@@ -202,7 +207,7 @@ void pageFault(uint32_t address)
             }
         }
 
-        currFrame = (pte & ~(pageSize - 1)) >> offSetBits;
+        currFrame = pte >> offSetBits;
         vpnkMask >>= levelBits;
     }
     printf("nothing wrong?\n");

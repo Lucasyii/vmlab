@@ -25,9 +25,7 @@ bool verbose = false;
 uint32_t validBitMask = 0x1;
 uint32_t refBitMask = 0x2;
 uint32_t softBitMask = 0x4;
-uint32_t lastPageFault = -1;
 int frameCount = -1;
-int demoteLimit = 10;
 uint32_t swapCount = 0;
 
 int loadLibrary(char* fileName)
@@ -149,8 +147,6 @@ pte_t *getPTE(uint32_t frame, uint32_t index)
 {
     uint32_t ptea = frame * pt->pageSize + (index * sizeof(pte_t));
     pte_t *pte = (pte_t *)(&(physicalMemory[ptea]));
-    // printf("getPTE= frame: 0x%x, index: 0x%x, pageSize: %u, ptea: 0x%x, pte: 0x%x\n",
-    //         frame, index, pt->pageSize, ptea, pte);
     return pte;
 }
 
@@ -182,31 +178,33 @@ int writePTE(uint32_t frame, uint32_t index, pte_t pte)
  *   Note that the path down to a normal page bit should be in descending order
  * of the sets
  * @param[in] pageTableRoot: Starting physical address of root of page table
- * @param[out]       result: 0 on success, -1 on failure
  */
-int demoteBits(uint32_t pageTableRoot, uint32_t level) {
+void demoteBits(uint32_t pageTableRoot, uint32_t level) {
     if (level == 0)
         printf("calling demoteBits\n");
-    else
-        printf("in level %d\n", level);
 
     uint32_t pageSize = pt->pageSize;
     uint32_t ppnMask = ~(pageSize - 1);
     for (uint32_t currAddr = pageTableRoot; currAddr < pageTableRoot + pageSize; currAddr += sizeof(pte_t))
     {
-        pte_t *pte = (pte_t *)(&(physicalMemory[currAddr])); // set 1
-        if (*pte & refBitMask && *pte & validBitMask) {
+        pte_t *pte = (pte_t *)(&(physicalMemory[currAddr]));
+        uint32_t pteBits = *pte & 0x7;
+
+        if (pteBits == (refBitMask | validBitMask)) {       // set 1
             *pte &= ~refBitMask; // clear out ref bit
+
             if (level != pt->levels)
                 demoteBits(*pte & ppnMask, level + 1);
-        } else if (*pte & validBitMask) {                    // set 2
+
+        } else if (pteBits == validBitMask) {               // set 2
             *pte &= (~validBitMask); // clear out valid bit
             *pte |= softBitMask; // set soft page fault bit
+
             if (level != pt->levels)
                 demoteBits(*pte & ppnMask, level + 1);
-        }
+        } // we don't demote set 3
     }
-    return 0;
+    return;
 }
 
 void printMemory(struct config *c)
@@ -214,8 +212,6 @@ void printMemory(struct config *c)
     for (int i = 0; i < c->numFrames; i++) {
         printf("\n-----------------page index %d--------------\n", i);
         for (int j = 0; j < c->pageSize; j += sizeof(pte_t)) {
-            // if (j != 0 && j % (sizeof(pte_t) * 4) == 0) printf("\n");
-
             pte_t *pte = (pte_t *)(&(physicalMemory[i * c->pageSize + j]));
             if (*pte != 0) // only print non-null
                 printf("index %lu: 0x%x\n", j / sizeof(pte_t),  *pte);
@@ -229,9 +225,9 @@ void printSwap(struct config *c)
     for (int i = 0; i < swapCount; i++) {
         printf("\n-----------------swap index %d--------------\n", i);
         for (int j = 0; j < c->pageSize; j += sizeof(pte_t)) {
-            if (j != 0 && j % (sizeof(pte_t) * 4) == 0) printf("\n");
             pte_t *pte = (pte_t *)(&(swapSpace[i * c->pageSize + j]));
-            printf("0x%x ", *pte);
+            if (*pte != 0)
+                printf("index %lu: 0x%x\n", j / sizeof(pte_t), *pte);
         }
     }
 
@@ -248,30 +244,27 @@ void printSwap(struct config *c)
 int translate(uint32_t virtualAddr, struct config *c)
 {
     printf("\n----------------HARDWARE------------------\n");
-    // 1. Get vpn from virtual_addr
 
-    // if pageOffsetBits = 4 ==> 000011...11111
     uint32_t vpnBits = 32 - pt->pageOffsetBits;
-    uint32_t offsetMask = (1 << pt->pageOffsetBits) - 1; // offsetMask = 0000...001111
+    uint32_t offsetMask = pt->pageSize - 1; // offsetMask = 0000...001111
 
     printf("translate called for addr: 0x%x\n",virtualAddr);
     // 2. Try to look into PTEA
     if (c->pageTableRoot == -1) {
         fprintf(stderr, "pageTableRoot should NEVER be null during a trace\n");
-        return -1;
+        exit(1);
     }
 
     if (vpnBits % pt->levels != 0) {
         printf("vpnBits = %u, pt->levels = %u illegal settings\n",
                 vpnBits, pt->levels);
-        return -1;
+        exit(1);
     }
 
     // Physical address of page table
     int ptAddr = c->pageTableRoot;
-    int physicalAddr = -1;
 
-    // vpnMask is a sliding window of bits that moves for every round
+    // vpnkMask is a sliding window of bits that moves down each level
     uint32_t levelBits = vpnBits / pt->levels;
     uint32_t vpnkMask = ((1 << levelBits) - 1) << (32 - levelBits);
     for (int i = 1; i <= pt->levels; i++)
@@ -282,16 +275,15 @@ int translate(uint32_t virtualAddr, struct config *c)
         if (verbose)
             printf("pte level #%d at ptea 0x%x: 0x%x\n", i, ptea, *pte);
 
-        if (!(*pte & validBitMask)) {
+        if (!(*pte & validBitMask)) { // pageFault determined by validBit
             // calls pageFault
             return -1;
         }
 
-        if (!(*pte & refBitMask)) { // referenced this page table entry!
-            *pte |= refBitMask;
-        }
+        // referenced this page table entry!
+        *pte |= refBitMask;
 
-        ptAddr = *pte & (~0 << pt->pageOffsetBits);
+        ptAddr = *pte & ~offsetMask;
 
         if (verbose)
             printf("ptAddr becomes: 0x%x\n", ptAddr);
@@ -299,7 +291,7 @@ int translate(uint32_t virtualAddr, struct config *c)
     }
 
     // ptAddr == physical page number
-    physicalAddr = ptAddr | (virtualAddr & offsetMask);
+    int physicalAddr = ptAddr | (virtualAddr & offsetMask);
 
     // TODO: physicalAddr post processing?
     if (verbose)
@@ -412,6 +404,8 @@ int main(int argc, char** argv)
     int addr = -1; // trace just going to be lines of uint32_t addr in hex
     int pageFaultCount = 0;
     int demoteCount = 0;
+    uint32_t lastPageFault = -1;
+    uint32_t demoteLimit = 10;
     while (fscanf(trace, "%x\n", &addr) > 0)
     {
         uint32_t translated = 0;
@@ -429,14 +423,11 @@ int main(int argc, char** argv)
             printMemory(&c);
         }
 
-        // printSwap(&c);
-        printf("\n----------------FOUND TRASLATION!-----------------\n");
+        printSwap(&c);
+        printf("\n----------------FOUND TRANSLATION!-----------------\n");
         printf("translated addr: 0x%x\n", translated);
         if (demoteCount++ == demoteLimit) {
-            if (demoteBits(c.pageTableRoot, 0) == -1) {
-                printf("demoteBits returned -1\n");
-                exit(1);
-            }
+            demoteBits(c.pageTableRoot, 0);
             demoteCount = 0;
             printMemory(&c);
         }
