@@ -57,6 +57,16 @@ bool swapExists(int swapID)
     return swapID < swapCount;
 }
 
+void printProtected(void)
+{
+    printf("Protected frames: ");
+    for (int i = 0; i < pageTableLevels; i++) {
+        printf("%d, ", protected[i]);
+    }
+    printf("\n");
+    return;
+}
+
 bool isProtected(uint32_t frame)
 {
     for (int i = 0; i < pageTableLevels; i++)
@@ -75,15 +85,20 @@ pte_t *findEvictHelper(uint32_t ptableFrame, uint32_t levels, uint32_t bits)
         pte_t *pte = getPTE(ptableFrame, i);
         uint32_t pteBits = *pte & 0x7;
 
-        if (pteBits == bits) {
+        if (*pte != 0)
+            printf("non-zero pte: 0x%x\n", *pte);
+        if ((pteBits & validMask) || (pteBits & softMask)) {
+            printf("checking frame %d index %d as pteBits valid or soft\n", ptableFrame, i);
             if (levels != pageTableLevels) {
                 evictingFramePTE = findEvictHelper(*pte >> offSetBits, levels+1, bits);
                 if (evictingFramePTE != NULL)
                     return evictingFramePTE;          // once lower level found, we want that
-                if (!isProtected(*pte >> offSetBits)) // this level valid pte
+                if (pteBits == bits && !isProtected(*pte >> offSetBits)) { // this level valid pte
+                    printf("frame %d is NOT protected\n", *pte >> offSetBits);
                     currLevelPTE = pte;
+                }
             } else {
-                if (!isProtected(*pte >> offSetBits)) // lowest level valid pte
+                if (pteBits == bits && !isProtected(*pte >> offSetBits)) // lowest level valid pte
                     return pte;
             }
         }
@@ -102,12 +117,13 @@ pte_t *findEvict(void)
     if (evictingFramePTE != NULL)
         return evictingFramePTE;
 
-    evictingFramePTE = findEvictHelper(pageTableFrame, 1, validMask | refMask); // set 2
+    evictingFramePTE = findEvictHelper(pageTableFrame, 1, validMask); // set 2
     if (evictingFramePTE != NULL)
         return evictingFramePTE;
 
     printf("we have to evict a valid one gng :sob:\n");
-    return findEvictHelper(pageTableFrame, 1, validMask); // set 1
+    printProtected();
+    return findEvictHelper(pageTableFrame, 1, validMask | refMask); // set 1
 }
 
 //

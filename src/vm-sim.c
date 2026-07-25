@@ -185,25 +185,25 @@ int writePTE(uint32_t frame, uint32_t index, pte_t pte)
  * @param[out]       result: 0 on success, -1 on failure
  */
 int demoteBits(uint32_t pageTableRoot, uint32_t level) {
-    if (level == 1)
+    if (level == 0)
         printf("calling demoteBits\n");
-    if (level == pt->levels)
-        return 0;
+    else
+        printf("in level %d\n", level);
 
     uint32_t pageSize = pt->pageSize;
     uint32_t ppnMask = ~(pageSize - 1);
-    for (uint32_t currAddr = pageTableRoot; currAddr < pageSize; currAddr += sizeof(pte_t))
+    for (uint32_t currAddr = pageTableRoot; currAddr < pageTableRoot + pageSize; currAddr += sizeof(pte_t))
     {
-        pte_t *pte = (pte_t *)(&(physicalMemory[currAddr]));
-        if (*pte & refBitMask) {
+        pte_t *pte = (pte_t *)(&(physicalMemory[currAddr])); // set 1
+        if (*pte & refBitMask && *pte & validBitMask) {
             *pte &= ~refBitMask; // clear out ref bit
-            if (demoteBits(*pte & ppnMask, level + 1) == -1)
-                return -1;
-        } else if (*pte & validBitMask) {
+            if (level != pt->levels)
+                demoteBits(*pte & ppnMask, level + 1);
+        } else if (*pte & validBitMask) {                    // set 2
             *pte &= (~validBitMask); // clear out valid bit
             *pte |= softBitMask; // set soft page fault bit
-            if (demoteBits(*pte & ppnMask, level + 1) == -1)
-                return -1;
+            if (level != pt->levels)
+                demoteBits(*pte & ppnMask, level + 1);
         }
     }
     return 0;
@@ -416,13 +416,6 @@ int main(int argc, char** argv)
     {
         uint32_t translated = 0;
         while ((translated = translate(addr, &c)) == -1) {
-            if (demoteCount++ == demoteLimit) {
-                if (demoteBits(c.pageTableRoot, 1) == -1) {
-                    printf("demoteBits returned -1\n");
-                    exit(1);
-                }
-                demoteCount = 0;
-            }
             if (lastPageFault != addr) { // checking if we're stuck in a loop
                 lastPageFault = addr;
                 pageFaultCount = 1;
@@ -436,9 +429,17 @@ int main(int argc, char** argv)
             printMemory(&c);
         }
 
-        printSwap(&c);
+        // printSwap(&c);
         printf("\n----------------FOUND TRASLATION!-----------------\n");
         printf("translated addr: 0x%x\n", translated);
+        if (demoteCount++ == demoteLimit) {
+            if (demoteBits(c.pageTableRoot, 0) == -1) {
+                printf("demoteBits returned -1\n");
+                exit(1);
+            }
+            demoteCount = 0;
+            printMemory(&c);
+        }
     }
 
     if (swapSpace != NULL) free(swapSpace);
