@@ -1,8 +1,7 @@
 /*
- * vm-sim.c: Simulates page management of process traces
- *
- *
- *
+ * vm-sim.c - VM hardware simulator
+ * Lucas Yi <hyi2@andrew.cmu.edu>
+ * 15-213 Summer 2026
  */
 #include <stdio.h>
 #include <dlfcn.h>
@@ -14,6 +13,7 @@
 
 int (*initLibrary)(struct config* conf) = NULL;
 void (*pageFault)(uint32_t address) = NULL;
+void (*timer)(void) = NULL;
 
 const char *USAGE = "%s -t <trace> -o <page fault library> -p <page offset bits> -V <verbose level> -n <frame count>\n";
 
@@ -24,7 +24,6 @@ struct pageTableHeader *pt;
 bool verbose = false;
 uint32_t validBitMask = 0x1;
 uint32_t refBitMask = 0x2;
-uint32_t softBitMask = 0x4;
 int frameCount = -1;
 uint32_t swapCount = 0;
 
@@ -40,6 +39,7 @@ int loadLibrary(char* fileName)
 
     initLibrary = dlsym(handle, "initLibrary");
     pageFault = dlsym(handle, "pageFault");
+    timer = dlsym(handle, "timer");
 
     if (initLibrary == NULL ||
         pageFault == NULL)
@@ -168,43 +168,6 @@ int writePTE(uint32_t frame, uint32_t index, pte_t pte)
     }
     *(pte_t *)(&(physicalMemory[ptea])) = pte;
     return 0;
-}
-
-/*
- * @brief recursively demotes ptes down this order:
- *        1. valid bit & ref bit
- *        2. valid bit & ~ref bit
- *        3. ~valid bit & ~ref bit & soft bit
- *   Note that the path down to a normal page bit should be in descending order
- * of the sets
- * @param[in] pageTableRoot: Starting physical address of root of page table
- */
-void demoteBits(uint32_t pageTableRoot, uint32_t level) {
-    if (level == 0)
-        printf("calling demoteBits\n");
-
-    uint32_t pageSize = pt->pageSize;
-    uint32_t ppnMask = ~(pageSize - 1);
-    for (uint32_t currAddr = pageTableRoot; currAddr < pageTableRoot + pageSize; currAddr += sizeof(pte_t))
-    {
-        pte_t *pte = (pte_t *)(&(physicalMemory[currAddr]));
-        uint32_t pteBits = *pte & 0x7;
-
-        if (pteBits == (refBitMask | validBitMask)) {       // set 1
-            *pte &= ~refBitMask; // clear out ref bit
-
-            if (level != pt->levels)
-                demoteBits(*pte & ppnMask, level + 1);
-
-        } else if (pteBits == validBitMask) {               // set 2
-            *pte &= (~validBitMask); // clear out valid bit
-            *pte |= softBitMask; // set soft page fault bit
-
-            if (level != pt->levels)
-                demoteBits(*pte & ppnMask, level + 1);
-        } // we don't demote set 3
-    }
-    return;
 }
 
 void printMemory(struct config *c)
@@ -403,9 +366,9 @@ int main(int argc, char** argv)
     FILE* trace = fopen(traceName, "r");
     int addr = -1; // trace just going to be lines of uint32_t addr in hex
     int pageFaultCount = 0;
-    int demoteCount = 0;
+    int timerCount = 0;
     uint32_t lastPageFault = -1;
-    uint32_t demoteLimit = 10;
+    uint32_t timerLimit = 10;
     while (fscanf(trace, "%x\n", &addr) > 0)
     {
         uint32_t translated = 0;
@@ -426,9 +389,9 @@ int main(int argc, char** argv)
         printSwap(&c);
         printf("\n----------------FOUND TRANSLATION!-----------------\n");
         printf("translated addr: 0x%x\n", translated);
-        if (demoteCount++ == demoteLimit) {
-            demoteBits(c.pageTableRoot, 0);
-            demoteCount = 0;
+        if (timerCount++ == timerLimit) {
+            timer();
+            timerCount = 0;
             printMemory(&c);
         }
     }

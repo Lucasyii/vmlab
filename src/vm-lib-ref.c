@@ -52,9 +52,49 @@ int initLibrary(struct config* conf)
     return 0;
 }
 
-bool swapExists(int swapID)
+/*
+ * @brief recursively demotes ptes down this order:
+ *        1. valid bit & ref bit
+ *        2. valid bit & ~ref bit
+ *        3. ~valid bit & ~ref bit & soft bit
+ *   Note that the path down to a normal page bit should be in descending order
+ * of the sets
+ * @param[in] pageTableRoot: Starting physical address of root of page table
+ * @param[in]         level: Indicator for recursive termination condition
+ */
+void demoteBits(uint32_t ptableFrame, uint32_t level) {
+    if (level == 0)
+        printf("calling demoteBits\n");
+
+    for (int i = 0; i < (pageSize / sizeof(pte_t)); i++)
+    {
+        pte_t *pte = getPTE(ptableFrame, i);
+        uint32_t pteBits = *pte & 0x7;
+
+        if (pteBits == (refMask | validMask)) {       // set 1
+            *pte &= ~refMask; // clear out ref bit
+
+            if (level != pageTableLevels)
+                demoteBits(*pte >> offSetBits, level + 1);
+
+        } else if (pteBits == validMask) {               // set 2
+            *pte &= ~validMask; // clear out valid bit
+            *pte |= softMask; // set soft page fault bit
+
+            if (level != pageTableLevels)
+                demoteBits(*pte >> offSetBits, level + 1);
+        } // we don't demote set 3
+    }
+    return;
+}
+
+/*
+ * Function called every 1000 address translations
+ */
+void timer(void)
 {
-    return swapID < swapCount;
+    demoteBits(pageTableFrame, 0);
+    return;
 }
 
 void printProtected(void)
