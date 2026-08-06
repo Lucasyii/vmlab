@@ -15,7 +15,9 @@ int (*initLibrary)(struct config* conf) = NULL;
 void (*pageFault)(uint32_t address) = NULL;
 void (*timer)(void) = NULL;
 
-const char *USAGE = "%s -t <trace> -o <page fault library> -p <page offset bits> -V <verbose level> -n <frame count>\n";
+// Could have multiple verbosity levels
+// "%s -t <trace> -o <page fault library> -p <page offset bits> -V <verbose level> -n <frame count>\n"
+const char *USAGE = "%s -t <trace> -o <page fault library> -p <page offset bits> -V -n <frame count>\n";
 
 // char * to make them byte indexable
 char *physicalMemory = NULL;
