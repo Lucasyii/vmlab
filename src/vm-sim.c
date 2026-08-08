@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include "vm-api.h"
+#include "vm-perf.h"
 
 int (*initLibrary)(struct config* conf) = NULL;
 void (*pageFault)(uint32_t address) = NULL;

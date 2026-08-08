@@ -19,8 +19,8 @@ typedef uint32_t pte_t;
 // simulator copies the data from "disk" to page frame
 // extern void copyFromSwap(uint32_t swap, uint32_t frame);
 
-// simulator gets value of pte entry from frame[index]
-// extern pte_t getPTE(uint32_t frame, uint32_t index);
+// simulator gets reference of pte entry from frame[index]
+// extern pte_t* getPTE(uint32_t frame, uint32_t index);
 
 // simulator writes value of pte entry from frame[index]
 //    returns -1 if unsuccessful
