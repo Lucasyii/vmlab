@@ -95,10 +95,12 @@ void copyToSwap(uint32_t frame, uint32_t swap)
 {
     printf("copyToSwap= frame: %d, swap: %d\n", (int)frame, (int)swap);
 
+    // tmp swap space
     if (frame == -1) {
         memcpy(&(swapSpace[pt->pageSize * swap]),
                pt->tmpSwap,
                pt->pageSize);
+        swapped(swap);
     } else if (swap == -1) {
         memcpy(pt->tmpSwap,
                &(physicalMemory[frame * pt->pageSize]),
@@ -108,6 +110,7 @@ void copyToSwap(uint32_t frame, uint32_t swap)
         memcpy(&(swapSpace[pt->pageSize * swap]),
                &(physicalMemory[frame * pt->pageSize]),
                pt->pageSize);
+        swapped(swap);
     }
     return;
 }
@@ -131,11 +134,13 @@ void copyFromSwap(uint32_t swap, uint32_t frame)
         memcpy(pt->tmpSwap,
                &(swapSpace[pt->pageSize * swap]),
                pt->pageSize);
+        swapped(swap);
     } else {
         // need to make sure memory not overlapping
         memcpy(&(physicalMemory[frame * pt->pageSize]),
                &(swapSpace[pt->pageSize * swap]),
                pt->pageSize);
+        swapped(swap);
     }
     return;
 }
@@ -365,6 +370,9 @@ int main(int argc, char** argv)
     printf("physical Memory has %d bytes\n", c.pageSize * c.numFrames);
     printf("before trace\n");
 
+    // initialize performance checker
+    initPerf(2);
+
     // open trace
     FILE* trace = fopen(traceName, "r");
     int addr = -1; // trace just going to be lines of uint32_t addr in hex
@@ -374,8 +382,8 @@ int main(int argc, char** argv)
     uint32_t timerLimit = 10;
     while (fscanf(trace, "%x\n", &addr) > 0)
     {
-        uint32_t translated = 0;
-        while ((translated = translate(addr, &c)) == -1) {
+        uint32_t pAddr = 0;
+        while ((pAddr = translate(addr, &c)) == -1) {
             if (lastPageFault != addr) { // checking if we're stuck in a loop
                 lastPageFault = addr;
                 pageFaultCount = 1;
@@ -386,18 +394,28 @@ int main(int argc, char** argv)
                 }
             }
             pageFault(addr);
-            printMemory(&c);
+            pagefaulted(addr);
+
+            // printMemory(&c);
         }
 
+        translated(addr, pAddr);
+
+        /* Print block # 1
         printSwap(&c);
         printf("\n----------------FOUND TRANSLATION!-----------------\n");
-        printf("translated addr: 0x%x\n", translated);
+        printf("translated addr: 0x%x\n", pAddr);
+        */
+
         if (timerCount++ == timerLimit) {
             timer();
             timerCount = 0;
             printMemory(&c);
         }
     }
+
+    printPerf();
+    freePerf();
 
     if (swapSpace != NULL) free(swapSpace);
     free(c.tmpSwap);
