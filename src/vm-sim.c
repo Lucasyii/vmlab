@@ -10,7 +10,6 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include "vm-api.h"
-#include "vm-perf.h"
 
 int (*initLibrary)(struct config* conf) = NULL;
 void (*pageFault)(uint32_t address) = NULL;
@@ -29,6 +28,11 @@ uint32_t validBitMask = 0x1;
 uint32_t refBitMask = 0x2;
 int frameCount = -1;
 uint32_t swapCount = 0;
+
+// performance checker
+size_t translateCount = 0;
+size_t pageFaultCount = 0;
+size_t swapAccessCount = 0;
 
 int loadLibrary(char* fileName)
 {
@@ -70,19 +74,18 @@ uint32_t allocateFrame(void) // frame is RAM
     return 0;
 }
 
-uint32_t allocateSwap(void) // swap is Disk (extension of RAM)
+uint32_t allocateSwap(void) // swap is Disk (extension of RAM) 0-indexed
 {
     if (swapCount == 0) {
         swapSpace = malloc(pt->pageSize);
-        swapCount = 1;
     } else {
-        swapSpace = realloc(swapSpace, ++swapCount * pt->pageSize);
+        swapSpace = realloc(swapSpace, (swapCount + 1) * pt->pageSize);
     }
 
-    printf("allocating new swap %u!\n", swapCount - 1);
-    memset(swapSpace + ((swapCount - 1) * pt->pageSize), 0, pt->pageSize);
+    printf("allocating new swap %u!\n", swapCount);
+    memset(swapSpace + (swapCount * pt->pageSize), 0, pt->pageSize);
 
-    return swapCount - 1;
+    return swapCount++;
 }
 
 /*
@@ -100,7 +103,7 @@ void copyToSwap(uint32_t frame, uint32_t swap)
         memcpy(&(swapSpace[pt->pageSize * swap]),
                pt->tmpSwap,
                pt->pageSize);
-        swapped(swap);
+        swapAccessCount++;
     } else if (swap == -1) {
         memcpy(pt->tmpSwap,
                &(physicalMemory[frame * pt->pageSize]),
@@ -110,12 +113,10 @@ void copyToSwap(uint32_t frame, uint32_t swap)
         memcpy(&(swapSpace[pt->pageSize * swap]),
                &(physicalMemory[frame * pt->pageSize]),
                pt->pageSize);
-        swapped(swap);
+        swapAccessCount++;
     }
     return;
 }
-
-// memcpy (*dest, *src, n bytes)
 
 /*
  * Directly copies the contents of a swap page to a frame
@@ -134,13 +135,13 @@ void copyFromSwap(uint32_t swap, uint32_t frame)
         memcpy(pt->tmpSwap,
                &(swapSpace[pt->pageSize * swap]),
                pt->pageSize);
-        swapped(swap);
+        swapAccessCount++;
     } else {
         // need to make sure memory not overlapping
         memcpy(&(physicalMemory[frame * pt->pageSize]),
                &(swapSpace[pt->pageSize * swap]),
                pt->pageSize);
-        swapped(swap);
+        swapAccessCount++;
     }
     return;
 }
@@ -178,6 +179,18 @@ int writePTE(uint32_t frame, uint32_t index, pte_t pte)
     return 0;
 }
 
+void printPerformance(void)
+{
+    printf("=== Performance Score ===\n"
+           "Translations : %zu\n"
+           "Page Faults  : %zu\n"
+           "Swaps        : %zu\n"
+           "=========================\n",
+           translateCount, pageFaultCount, swapAccessCount);
+
+    return;
+}
+
 void printMemory(struct config *c)
 {
     for (int i = 0; i < c->numFrames; i++) {
@@ -205,7 +218,6 @@ void printSwap(struct config *c)
 }
 
 /*
- *
  * @pre assumes correct initialization of library
  * @pre c->pageSize: power of 2
  * @param[in]  addr: Virtual address we tryna get
@@ -262,7 +274,7 @@ int translate(uint32_t virtualAddr, struct config *c)
     }
 
     // ptAddr == physical page number
-    int physicalAddr = ptAddr | (virtualAddr & offsetMask);
+    uint32_t physicalAddr = ptAddr | (virtualAddr & offsetMask);
 
     // TODO: physicalAddr post processing?
     if (verbose)
@@ -370,13 +382,10 @@ int main(int argc, char** argv)
     printf("physical Memory has %d bytes\n", c.pageSize * c.numFrames);
     printf("before trace\n");
 
-    // initialize performance checker
-    initPerf(2);
-
     // open trace
     FILE* trace = fopen(traceName, "r");
     int addr = -1; // trace just going to be lines of uint32_t addr in hex
-    int pageFaultCount = 0;
+    int loopChecker = 0;
     int timerCount = 0;
     uint32_t lastPageFault = -1;
     uint32_t timerLimit = 10;
@@ -386,20 +395,20 @@ int main(int argc, char** argv)
         while ((pAddr = translate(addr, &c)) == -1) {
             if (lastPageFault != addr) { // checking if we're stuck in a loop
                 lastPageFault = addr;
-                pageFaultCount = 1;
+                loopChecker = 1;
             } else {
-                if (++pageFaultCount > (pt->levels) + 2) {
+                if (++loopChecker > (pt->levels) + 2) {
                     printf("stuck in a loop.. exiting\n");
                     return 1;
                 }
             }
             pageFault(addr);
-            pagefaulted(addr);
+            pageFaultCount++;
 
             // printMemory(&c);
         }
 
-        translated(addr, pAddr);
+        translateCount++;
 
         /* Print block # 1
         printSwap(&c);
@@ -414,8 +423,7 @@ int main(int argc, char** argv)
         }
     }
 
-    printPerf();
-    freePerf();
+    printPerformance();
 
     if (swapSpace != NULL) free(swapSpace);
     free(c.tmpSwap);
