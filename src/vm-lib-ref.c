@@ -20,7 +20,7 @@ int offSetBits = 0;
 int swapCount = 0;
 int numFrames = 0;
 int pageTableLevels = 0;
-char *tmpSwap = NULL;
+int tmpSwapID = 0;
 uint32_t *protected = NULL;
 
 //
@@ -42,9 +42,9 @@ int initLibrary(struct config* conf)
     pageSize = conf->pageSize;
     offSetBits = conf->offsetBits;
     numFrames = conf->numFrames;
-    tmpSwap = conf->tmpSwap;
 
     conf->pageTableRoot = allocateFrame();
+    tmpSwapID = allocateSwap();
     pageTableFrame = conf->pageTableRoot;
 
     pageTableLevels = (32 - offSetBits) / (offSetBits - 2);
@@ -211,9 +211,9 @@ void pageFault(uint32_t address)
                 uint32_t evictingFrame = *evictingPTE >> offSetBits;
 
                 // swaps the evictingFrame & swapID page!
-                copyToSwap(evictingFrame, -1); // copy to tmp
+                copyToSwap(evictingFrame, tmpSwapID); // copy to tmp
                 copyFromSwap(swapID, evictingFrame);
-                copyToSwap(-1, swapID);
+                copyToSwap(tmpSwapID, swapID);
 
                 // ref bit used to indicate that ppn holding swap ID & differentiate from null
                 *evictingPTE = (((swapID << offSetBits) & (~validMask)) | refMask) & (~softMask);
@@ -235,9 +235,9 @@ void pageFault(uint32_t address)
 
                 // shove the evictingFrame into newSwap page!
                 uint32_t newSwap = allocateSwap();
-                copyToSwap(evictingFrame, -1); // copy to tmp
+                copyToSwap(evictingFrame, tmpSwapID); // copy to tmp
                 copyFromSwap(newSwap, evictingFrame);
-                copyToSwap(-1, newSwap);
+                copyToSwap(tmpSwapID, newSwap);
 
                 // ref bit used to indicate that ppn holding swap ID & differentiate from null
                 *evictingPTE = (((newSwap << offSetBits) & (~validMask)) | refMask) & (~softMask);

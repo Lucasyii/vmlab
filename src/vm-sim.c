@@ -91,58 +91,36 @@ uint32_t allocateSwap(void) // swap is Disk (extension of RAM) 0-indexed
 /*
  * Directly copies the contents of a frame to a swap page
  *
- * @param[in] frame: frameID to swap from, if -1, use tmp swap
- * @param[in]  swap: swapID to swap to, if -1 use tmp swap
+ * @param[in] frame: frameID to swap from
+ * @param[in]  swap: swapID to swap to
  */
 void copyToSwap(uint32_t frame, uint32_t swap)
 {
     printf("copyToSwap= frame: %d, swap: %d\n", (int)frame, (int)swap);
 
     // tmp swap space
-    if (frame == -1) {
-        memcpy(&(swapSpace[pt->pageSize * swap]),
-               pt->tmpSwap,
-               pt->pageSize);
-        swapAccessCount++;
-    } else if (swap == -1) {
-        memcpy(pt->tmpSwap,
-               &(physicalMemory[frame * pt->pageSize]),
-               pt->pageSize);
-    } else {
-        // need to make sure memory not overlapping
-        memcpy(&(swapSpace[pt->pageSize * swap]),
-               &(physicalMemory[frame * pt->pageSize]),
-               pt->pageSize);
-        swapAccessCount++;
-    }
+    // need to make sure memory not overlapping
+    memcpy(&(swapSpace[pt->pageSize * swap]),
+           &(physicalMemory[frame * pt->pageSize]),
+             pt->pageSize);
+    swapAccessCount++;
     return;
 }
 
 /*
  * Directly copies the contents of a swap page to a frame
  *
- * @param[in]  swap: swapID to swap to, if -1 use tmp swap
- * @param[in] frame: frameID to swap from, if -1, use tmp swap
+ * @param[in]  swap: swapID to swap to
+ * @param[in] frame: frameID to swap from
  */
 void copyFromSwap(uint32_t swap, uint32_t frame)
 {
     printf("copyFromSwap= swap: %d, frame: %d\n", (int)swap, (int)frame);
-    if (swap == -1) {
-        memcpy(&(physicalMemory[frame * pt->pageSize]),
-               pt->tmpSwap,
-               pt->pageSize);
-    } else if (frame == -1) {
-        memcpy(pt->tmpSwap,
-               &(swapSpace[pt->pageSize * swap]),
-               pt->pageSize);
-        swapAccessCount++;
-    } else {
-        // need to make sure memory not overlapping
-        memcpy(&(physicalMemory[frame * pt->pageSize]),
-               &(swapSpace[pt->pageSize * swap]),
-               pt->pageSize);
-        swapAccessCount++;
-    }
+    // need to make sure memory not overlapping
+    memcpy(&(physicalMemory[frame * pt->pageSize]),
+           &(swapSpace[pt->pageSize * swap]),
+             pt->pageSize);
+    swapAccessCount++;
     return;
 }
 
@@ -367,20 +345,21 @@ int main(int argc, char** argv)
     c.getPTE = getPTE;
     c.writePTE = writePTE;
     c.offsetBits = pageOffBits; // wanna get rid of this
-    c.tmpSwap = malloc(c.pageSize);
-    initLibrary(&c);
 
+    // page table header initialization
     pt = malloc(sizeof(struct pageTableHeader));
     pt->pageOffsetBits = pageOffBits;
     pt->pageSize = c.pageSize;
     pt->levels = (32 - pageOffBits) / (pageOffBits - 2);
-    pt->tmpSwap = c.tmpSwap;
 
     // physical memory initialization
     physicalMemory = calloc(c.pageSize, c.numFrames);
     c.pageTableRoot = 0;
     printf("physical Memory has %d bytes\n", c.pageSize * c.numFrames);
     printf("before trace\n");
+
+    // initialize student library code
+    initLibrary(&c);
 
     // open trace
     FILE* trace = fopen(traceName, "r");
@@ -426,7 +405,6 @@ int main(int argc, char** argv)
     printPerformance();
 
     if (swapSpace != NULL) free(swapSpace);
-    free(c.tmpSwap);
     free(physicalMemory);
     free(pt);
 

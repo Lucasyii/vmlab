@@ -31,7 +31,6 @@ struct config {
     int pageSize;
     int numFrames;
     int pageTableRoot; // -1 if null/root not in memory, else, PA in RAM
-    char *tmpSwap; // wanna get rid of this
     uint32_t (*allocateFrame)(void);
     uint32_t (*allocateSwap)(void);
     void (*copyToSwap)(uint32_t, uint32_t);
@@ -44,7 +43,6 @@ struct config {
 // Page table entry are each 4 bytes SET
 // All entries being -1 means they are null
 struct pageTableHeader {
-    char *tmpSwap; // wanna get rid of this
     int pageSize;
     short pageOffsetBits;
     short levels;
