@@ -39,6 +39,7 @@ int initLibrary(struct config* conf)
     copyFromSwap = conf->copyFromSwap;
     getPTE = conf->getPTE;
     writePTE = conf->writePTE;
+
     pageSize = conf->pageSize;
     offSetBits = conf->offsetBits;
     numFrames = conf->numFrames;
@@ -177,14 +178,13 @@ void pageFault(uint32_t address)
     if (currFrame == -1)
         exit(1);
 
-    uint32_t levels = (32 - offSetBits) / (offSetBits - 2);
-    uint32_t levelBits = (32 - offSetBits) / levels;
+    uint32_t levelBits = (32 - offSetBits) / pageTableLevels;
     uint32_t vpnkMask = ((1 << levelBits) - 1) << (32 - levelBits);
 
-    protected = malloc(sizeof(uint32_t) * levels);
-    for (int i = 0; i < levels; i++) protected[i] = pageTableFrame;
+    protected = malloc(sizeof(uint32_t) * pageTableLevels);
+    for (int i = 0; i < pageTableLevels; i++) protected[i] = pageTableFrame;
 
-    for (int i = 1; i <= levels; i++)
+    for (int i = 1; i <= pageTableLevels; i++)
     {
         uint32_t vpnk = (address & vpnkMask) >> (32 - (i * levelBits));
         printf("vpnkMask: 0x%x, vpnk: 0x%x\n", vpnkMask, vpnk);

@@ -1,0 +1,7 @@
+
+    - performance nuance? currently only tracking major vs minor
+      faults + successful translations. So we could increase performance checks
+      by looking at how many times physical memory is accessed & how often
+      swap space is accessed. This a maybe tho im not sure
+
+===============================================================================

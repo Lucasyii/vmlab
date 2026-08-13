@@ -66,7 +66,7 @@ uint32_t allocateFrame(void) // frame is RAM
     if (nextFrame < (uint32_t)frameCount ||
         frameCount == -1)
     {
-        // initLibrary should call allocateFrame() to assign frame 0 as pageTableRoot
+        // initLibrary should call allocateFrame() to assign frame 0 as pageTableRoot (?)
         printf("allocating new frame %u!\n", nextFrame);
         return nextFrame++;
     }
@@ -159,12 +159,17 @@ int writePTE(uint32_t frame, uint32_t index, pte_t pte)
 
 void printPerformance(void)
 {
+    size_t total = translateCount + pageFaultCount * 100 + swapAccessCount * 1000;
     printf("=== Performance Score ===\n"
-           "Translations : %zu\n"
-           "Page Faults  : %zu\n"
-           "Swaps        : %zu\n"
+           "Translations : %05zu => %zu cycles\n"
+           "Page Faults  : %05zu => %zu cycles\n"
+           "Swaps        : %05zu => %zu cycles\n"
+           "Total        :          %zu cycles\n"
            "=========================\n",
-           translateCount, pageFaultCount, swapAccessCount);
+           translateCount, translateCount,
+           pageFaultCount, pageFaultCount * 100,
+           swapAccessCount, swapAccessCount * 1000,
+           total);
 
     return;
 }
@@ -210,6 +215,7 @@ int translate(uint32_t virtualAddr, struct config *c)
     uint32_t offsetMask = pt->pageSize - 1; // offsetMask = 0000...001111
 
     printf("translate called for addr: 0x%x\n",virtualAddr);
+
     // 2. Try to look into PTEA
     if (c->pageTableRoot == -1) {
         fprintf(stderr, "pageTableRoot should NEVER be null during a trace\n");
